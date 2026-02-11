@@ -2,36 +2,75 @@
 import { SubtitleBlock } from '../types';
 
 /**
+ * Chuyển đổi chuỗi timestamp SRT (00:00:00,000) sang Milliseconds
+ */
+const timestampToMs = (ts: string): number => {
+  const match = ts.match(/(\d{2}):(\d{2}):(\d{2}),(\d{3})/);
+  if (!match) return 0;
+  const [_, h, m, s, ms] = match.map(Number);
+  return h * 3600000 + m * 60000 + s * 1000 + ms;
+};
+
+/**
+ * Chuyển đổi Milliseconds sang chuỗi timestamp SRT
+ */
+const msToTimestamp = (ms: number): string => {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const mss = Math.floor(ms % 1000);
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')},${mss.toString().padStart(3, '0')}`;
+};
+
+/**
+ * Chỉnh sửa toàn bộ timestamp của file SRT dựa trên tốc độ (Speed)
+ * Công thức: new_time = old_time / speed
+ */
+export const adjustSrtTiming = (blocks: SubtitleBlock[], speed: number): SubtitleBlock[] => {
+  if (speed === 1) return blocks;
+  return blocks.map(block => {
+    const parts = block.timestamp.split(' --> ');
+    if (parts.length !== 2) return block;
+    
+    const startMs = timestampToMs(parts[0]);
+    const endMs = timestampToMs(parts[1]);
+    
+    const newStart = msToTimestamp(startMs / speed);
+    const newEnd = msToTimestamp(endMs / speed);
+    
+    return {
+      ...block,
+      timestamp: `${newStart} --> ${newEnd}`
+    };
+  });
+};
+
+/**
  * Tự động tách tiêu đề tiếng Trung từ tên file
- * Loại bỏ các tag [..], domain, EpXX, Review, dấu gạch ngang...
- * ĐẢM BẢO: Giữ nguyên 100% chuỗi tiêu đề nhận diện được (bao gồm dấu câu).
+ * ĐẢM BẢO: Bỏ qua các prefix hệ thống [Speed], [Partial], [Translated]
  */
 export const extractChineseTitle = (fileName: string): string => {
-  // 1. Loại bỏ phần mở rộng .srt
   let name = fileName.replace(/\.[^/.]+$/, "");
   
-  // 2. Loại bỏ các tiền tố quản lý của hệ thống [Partial], [Partial-X], [Translated]
+  // Xóa các tiền tố quản lý (Speed, Partial, Translated)
+  name = name.replace(/^\[Speed-[\d.]+\]\s*/i, "");
   name = name.replace(/^\[Partial(-\d+)?\]\s*/i, "");
   name = name.replace(/^\[Translated\]\s*/i, "");
   
-  // 3. Loại bỏ các nội dung trong ngoặc [] hoặc () hoặc {} (thường là tag metadata)
+  // Xóa metadata trong ngoặc
   name = name.replace(/\[.*?\]|\(.*?\)|{.*?}/g, "");
   
-  // 4. Loại bỏ các từ khóa nhiễu phổ biến
-  const keywords = [
-    "Dở dang", "Translated", "DLBunny.com", "bilibili", "Ep\\d+", "Tập\\d+", "Tập \\d+",
-    "1080p", "720p", "4K", "Review", "Subtitle", "Vietsub", "Thuyết minh", "Full", "HD"
-  ];
+  // Xóa keyword nhiễu
+  const keywords = ["Translated", "bilibili", "Ep\\d+", "Tập\\d+", "1080p", "720p", "4K", "Review", "Subtitle", "Vietsub"];
   const keywordRegex = new RegExp(keywords.join("|"), "gi");
   name = name.replace(keywordRegex, "");
   
-  // 5. Tìm các đoạn chứa ký tự tiếng Trung hoặc dấu câu Trung Quốc liên tục
+  // Lấy chuỗi tiếng Trung liên tục dài nhất
   const chineseTitleRegex = /[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef\s,，!！?？:：]+/;
   const match = name.match(chineseTitleRegex);
   
   if (match) {
     let title = match[0].trim();
-    // Loại bỏ các dấu gạch ngang/gạch dưới ở đầu/cuối nếu có
     title = title.replace(/^[_\-\s]+|[_\-\s]+$/g, "");
     if (title.length > 0) return title;
   }
@@ -40,30 +79,30 @@ export const extractChineseTitle = (fileName: string): string => {
 };
 
 /**
- * Tạo tên file mới dựa trên quy tắc quản lý phiên bản:
- * - Lần đầu: [Partial]
- * - Lần sau: [Partial-2], [Partial-3]...
- * - Hoàn thành: [Translated]
+ * Tạo tên file mới dựa trên quy tắc quản lý phiên bản
  */
-export const generateFileName = (currentName: string, isFinished: boolean): string => {
-  // Loại bỏ đuôi srt để xử lý
-  const baseName = currentName.replace(/\.[^/.]+$/, "");
+export const generateFileName = (currentName: string, isFinished: boolean, speed?: number): string => {
+  let baseName = currentName.replace(/\.[^/.]+$/, "");
   
+  // Nếu là chức năng Speed Editor
+  if (speed !== undefined && speed !== 1) {
+    // Xóa prefix Speed cũ nếu có để thay cái mới
+    baseName = baseName.replace(/^\[Speed-[\d.]+\]\s*/i, "");
+    return `[Speed-${speed}] ${baseName}.srt`;
+  }
+
+  // Nếu là chức năng Translator
   if (isFinished) {
-    // Nếu hoàn thành, bỏ mọi tiền tố Partial và thêm [Translated]
     const cleanName = baseName.replace(/^\[Partial(-\d+)?\]\s*/i, "");
     return `[Translated] ${cleanName}.srt`;
   }
 
-  // Logic cho file dở dang (Partial)
+  // Logic Partial-N
   const partialMatch = baseName.match(/^\[Partial(-(\d+))?\]/i);
-  
   if (!partialMatch) {
-    // Lần lỗi đầu tiên
     return `[Partial] ${baseName}.srt`;
   }
 
-  // Đã có tiền tố Partial, thực hiện tăng số thứ tự
   const currentNum = partialMatch[2] ? parseInt(partialMatch[2]) : 1;
   const nextNum = currentNum + 1;
   const cleanName = baseName.replace(/^\[Partial(-\d+)?\]\s*/i, "");
