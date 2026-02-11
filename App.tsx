@@ -6,7 +6,7 @@ import {
   RefreshCw, Box, Tags, BookOpen, Target, FileSearch, Info, History
 } from 'lucide-react';
 import { TitleAnalysis, SubtitleBlock, TranslationState, SessionStats, InterruptionInfo } from './types';
-import { parseSRT, stringifySRT, extractChineseTitle } from './utils/srtParser';
+import { parseSRT, stringifySRT, extractChineseTitle, generateFileName } from './utils/srtParser';
 import { translateSubtitles, analyzeTitle, checkApiHealth } from './services/geminiService';
 
 const MODELS = [
@@ -81,7 +81,6 @@ const App: React.FC = () => {
       const parsed = parseSRT(content);
       
       let translatedCount = 0;
-      let chineseCount = 0;
 
       const processedBlocks = parsed.map(block => {
         const hasChinese = containsChinese(block.originalText);
@@ -89,7 +88,6 @@ const App: React.FC = () => {
           translatedCount++;
           return { ...block, translatedText: block.originalText };
         } else {
-          chineseCount++;
           return block;
         }
       });
@@ -161,9 +159,16 @@ const App: React.FC = () => {
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
+    
+    // Sử dụng logic generateFileName mới để tuân thủ quy tắc đặt tên
+    const newName = generateFileName(fileName, !isPartial);
+    
     a.href = url;
-    a.download = `${isPartial ? '[Dở dang]_' : '[Hoàn thiện]_'}${fileName}`;
+    a.download = newName;
     a.click();
+    
+    // Cập nhật lại fileName trong state để lần download lỗi tiếp theo tăng số thứ tự
+    setFileName(newName);
   };
 
   const progressPercentage = status.total > 0 ? Math.round((status.progress / status.total) * 100) : 0;
