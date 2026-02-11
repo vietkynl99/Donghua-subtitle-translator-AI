@@ -4,29 +4,35 @@ import { SubtitleBlock } from '../types';
 /**
  * Tự động tách tiêu đề tiếng Trung từ tên file
  * Loại bỏ các tag [..], domain, EpXX, Review, dấu gạch ngang...
+ * ĐẢM BẢO: Giữ nguyên 100% chuỗi tiêu đề nhận diện được (bao gồm dấu câu).
  */
 export const extractChineseTitle = (fileName: string): string => {
-  // Loại bỏ phần mở rộng .srt
+  // 1. Loại bỏ phần mở rộng .srt
   let name = fileName.replace(/\.[^/.]+$/, "");
   
-  // Loại bỏ các nội dung trong ngoặc [] hoặc ()
-  name = name.replace(/\[.*?\]|\(.*?\)/g, "");
+  // 2. Loại bỏ các nội dung trong ngoặc [] hoặc () hoặc {} (thường là tag metadata)
+  name = name.replace(/\[.*?\]|\(.*?\)|{.*?}/g, "");
   
-  // Loại bỏ các từ khóa phổ biến
+  // 3. Loại bỏ các từ khóa nhiễu phổ biến
   const keywords = [
-    "Dở dang", "Translated", "DLBunny.com", "bilibili", "Ep\\d+", "Tập\\d+", 
-    "1080p", "720p", "4K", "Review", "Subtitle", "Vietsub", "Thuyết minh"
+    "Dở dang", "Translated", "DLBunny.com", "bilibili", "Ep\\d+", "Tập\\d+", "Tập \\d+",
+    "1080p", "720p", "4K", "Review", "Subtitle", "Vietsub", "Thuyết minh", "Full", "HD"
   ];
   const keywordRegex = new RegExp(keywords.join("|"), "gi");
   name = name.replace(keywordRegex, "");
   
-  // Thay thế các dấu phân cách bằng khoảng trắng
-  name = name.replace(/[_\-\.]/g, " ");
+  // 4. Tìm các đoạn chứa ký tự tiếng Trung hoặc dấu câu Trung Quốc liên tục
+  // \u4e00-\u9fa5: Chữ Hán
+  // \u3000-\u303f: Dấu câu CJK
+  // \uff00-\uffef: Dấu câu toàn chiều rộng (Full-width) như ，！
+  const chineseTitleRegex = /[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef\s,，!！?？:：]+/;
+  const match = name.match(chineseTitleRegex);
   
-  // Tìm chuỗi tiếng Trung dài nhất liên tục
-  const chineseMatches = name.match(/[\u4e00-\u9fa5]+/g);
-  if (chineseMatches) {
-    return chineseMatches.reduce((a, b) => a.length > b.length ? a : b);
+  if (match) {
+    let title = match[0].trim();
+    // Loại bỏ các dấu gạch ngang/gạch dưới ở đầu/cuối nếu có do quá trình tách file
+    title = title.replace(/^[_\-\s]+|[_\-\s]+$/g, "");
+    if (title.length > 0) return title;
   }
   
   return name.trim();
@@ -35,7 +41,7 @@ export const extractChineseTitle = (fileName: string): string => {
 export const parseSRT = (content: string): SubtitleBlock[] => {
   const blocks: SubtitleBlock[] = [];
   const normalized = content.replace(/\r\n/g, '\n').trim();
-  // Tách block dựa trên dòng trống, xử lý trường hợp có nhiều dòng trống liên tiếp
+  // Tách block dựa trên dòng trống
   const splitBlocks = normalized.split(/\n\s*\n/);
 
   for (const block of splitBlocks) {

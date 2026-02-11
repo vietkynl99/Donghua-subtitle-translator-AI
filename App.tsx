@@ -69,6 +69,7 @@ const App: React.FC = () => {
       return;
     }
 
+    // Tách tiêu đề gốc 100% không rút gọn
     const title = extractChineseTitle(file.name);
     setDetectedTitle(title);
     setTitleInput(title);
@@ -81,7 +82,6 @@ const App: React.FC = () => {
       
       let translatedCount = 0;
       const processedBlocks = parsed.map(block => {
-        // Nếu block không chứa tiếng Trung, coi như đã dịch
         if (!containsChinese(block.originalText)) {
           translatedCount++;
           return { ...block, translatedText: block.originalText };
@@ -94,7 +94,6 @@ const App: React.FC = () => {
       setStatus(prev => ({ ...prev, total: processedBlocks.length, progress: translatedCount, error: null }));
       setStats(prev => ({ ...prev, translatedBlocks: translatedCount }));
       
-      // Tự động phân tích sau khi nhận diện title
       handleAnalyze(title);
     };
     reader.readAsText(file);
@@ -132,7 +131,6 @@ const App: React.FC = () => {
     a.click();
   };
 
-  // Define derived state variables to fix "Cannot find name" errors
   const progressPercentage = status.total > 0 ? Math.round((status.progress / status.total) * 100) : 0;
   const isFinished = status.total > 0 && status.progress === status.total;
 
@@ -195,8 +193,8 @@ const App: React.FC = () => {
                 <div className="space-y-5 animate-in fade-in slide-in-from-top-4 duration-500">
                   <div className="p-4 bg-indigo-600/10 border border-indigo-500/30 rounded-2xl space-y-2">
                     <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">📌 TIÊU ĐỀ NHẬN DIỆN (ZH):</span>
-                    <p className="text-sm font-bold text-white pl-2">{detectedTitle}</p>
-                    <div className="flex items-center gap-2 text-[10px] text-slate-500 pt-1">
+                    <p className="text-sm font-bold text-white pl-2 break-words leading-relaxed">{detectedTitle}</p>
+                    <div className="flex items-center gap-2 text-[10px] text-slate-500 pt-1 border-t border-indigo-500/10">
                       <FileText size={12} /> <span className="truncate">{fileName}</span>
                     </div>
                   </div>
@@ -308,7 +306,7 @@ const App: React.FC = () => {
                       </div>
                       <p className="text-xs text-slate-400 font-serif-vi leading-relaxed">{block.originalText}</p>
                     </div>
-                    <div className="md:border-l border-slate-800 md:pl-8 space-y-3 flex flex-col justify-center min-h-[60px]">
+                    <div className="md:border-l border-slate-800 md:pl-8 space-y-3 flex flex-col justify-center min-h-[80px]">
                       <div className="flex justify-between items-center">
                         <span className={`text-[9px] uppercase font-bold tracking-[0.25em] ${isTranslated ? 'text-emerald-500' : 'text-slate-600'}`}>
                           {isTranslated ? 'Bản dịch tối ưu' : 'Đang xử lý...'}
