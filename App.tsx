@@ -3,9 +3,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Upload, Download, Play, CheckCircle2, AlertCircle, Loader2, Trash2, 
   FileText, Search, Sparkles, ChevronRight, Activity, Cpu, FileDown, 
-  RefreshCw, Box, Tags, BookOpen, Target, FileSearch, Info
+  RefreshCw, Box, Tags, BookOpen, Target, FileSearch, Info, History
 } from 'lucide-react';
-import { TitleAnalysis, SubtitleBlock, TranslationState, SessionStats } from './types';
+import { TitleAnalysis, SubtitleBlock, TranslationState, SessionStats, InterruptionInfo } from './types';
 import { parseSRT, stringifySRT, extractChineseTitle } from './utils/srtParser';
 import { translateSubtitles, analyzeTitle, checkApiHealth } from './services/geminiService';
 
@@ -21,7 +21,6 @@ const App: React.FC = () => {
   const [blocks, setBlocks] = useState<SubtitleBlock[]>([]);
   const [fileName, setFileName] = useState<string>('');
   const [isDragging, setIsDragging] = useState(false);
-  const [isResumeMode, setIsResumeMode] = useState(false);
   const [stats, setStats] = useState<SessionStats>({
     requests: 0,
     totalTokens: 0,
@@ -33,6 +32,8 @@ const App: React.FC = () => {
     progress: 0,
     total: 0,
     error: null,
+    interruption: null,
+    fileStatus: null,
     apiStatus: 'checking',
     selectedModel: 'gemini-3-flash-preview'
   });
@@ -51,13 +52,13 @@ const App: React.FC = () => {
 
   const handleAnalyze = async (title: string) => {
     if (!title.trim() || status.isAnalyzing) return;
-    setStatus(prev => ({ ...prev, isAnalyzing: true, error: null }));
+    setStatus(prev => ({ ...prev, isAnalyzing: true, error: null, interruption: null }));
     try {
       const { analysis: result, tokens } = await analyzeTitle(title, status.selectedModel);
       setAnalysis(result);
       setStats(prev => ({ ...prev, requests: prev.requests + 1, totalTokens: prev.totalTokens + tokens }));
     } catch (err: any) {
-      setStatus(prev => ({ ...prev, error: "Hết hạn mức API (429). Vui lòng thử lại sau 1 phút." }));
+      setStatus(prev => ({ ...prev, error: "Lỗi kết nối API phân tích tiêu đề." }));
     } finally {
       setStatus(prev => ({ ...prev, isAnalyzing: false }));
     }
@@ -69,7 +70,6 @@ const App: React.FC = () => {
       return;
     }
 
-    // Tách tiêu đề gốc 100% không rút gọn
     const title = extractChineseTitle(file.name);
     setDetectedTitle(title);
     setTitleInput(title);
@@ -81,17 +81,35 @@ const App: React.FC = () => {
       const parsed = parseSRT(content);
       
       let translatedCount = 0;
+      let chineseCount = 0;
+
       const processedBlocks = parsed.map(block => {
-        if (!containsChinese(block.originalText)) {
+        const hasChinese = containsChinese(block.originalText);
+        if (!hasChinese) {
           translatedCount++;
           return { ...block, translatedText: block.originalText };
+        } else {
+          chineseCount++;
+          return block;
         }
-        return block;
       });
 
-      setIsResumeMode(translatedCount > 0 && translatedCount < parsed.length);
+      let fileStatus: 'new' | 'mixed' | 'completed' = 'new';
+      if (translatedCount === parsed.length) {
+        fileStatus = 'completed';
+      } else if (translatedCount > 0) {
+        fileStatus = 'mixed';
+      }
+
       setBlocks(processedBlocks);
-      setStatus(prev => ({ ...prev, total: processedBlocks.length, progress: translatedCount, error: null }));
+      setStatus(prev => ({ 
+        ...prev, 
+        total: processedBlocks.length, 
+        progress: translatedCount, 
+        error: null,
+        interruption: null,
+        fileStatus
+      }));
       setStats(prev => ({ ...prev, translatedBlocks: translatedCount }));
       
       handleAnalyze(title);
@@ -101,7 +119,7 @@ const App: React.FC = () => {
 
   const startTranslation = async () => {
     if (blocks.length === 0 || !analysis) return;
-    setStatus(prev => ({ ...prev, isTranslating: true, error: null }));
+    setStatus(prev => ({ ...prev, isTranslating: true, error: null, interruption: null }));
     let lastProgress = status.progress;
     
     try {
@@ -115,9 +133,26 @@ const App: React.FC = () => {
         }));
       });
       setBlocks(translated);
-      setStatus(prev => ({ ...prev, isTranslating: false }));
+      setStatus(prev => ({ ...prev, isTranslating: false, fileStatus: 'completed' }));
     } catch (err: any) {
-      setStatus(prev => ({ ...prev, isTranslating: false, error: "Dịch bị dừng. Tải file dở dang về, chờ 1 phút và upload lại để tiếp tục." }));
+      const errStr = err?.toString() || "";
+      let reason = "Khác: mô tả ngắn gọn";
+      if (errStr.includes("429")) reason = "Hết quota API";
+      else if (errStr.toLowerCase().includes("limit") || errStr.toLowerCase().includes("token")) reason = "Quá giới hạn token";
+      else if (errStr.toLowerCase().includes("timeout") || errStr.toLowerCase().includes("network")) reason = "Timeout / mạng không ổn định";
+
+      const currentTranslated = blocks.filter(b => b.translatedText && !containsChinese(b.translatedText)).length;
+      
+      setStatus(prev => ({ 
+        ...prev, 
+        isTranslating: false, 
+        interruption: {
+          reason,
+          total: prev.total,
+          translated: currentTranslated,
+          remaining: prev.total - currentTranslated
+        }
+      }));
     }
   };
 
@@ -132,7 +167,6 @@ const App: React.FC = () => {
   };
 
   const progressPercentage = status.total > 0 ? Math.round((status.progress / status.total) * 100) : 0;
-  const isFinished = status.total > 0 && status.progress === status.total;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30">
@@ -240,17 +274,25 @@ const App: React.FC = () => {
               <Activity size={16} /> Bước 3: Dịch thuật & Hoàn tất
             </h2>
             <div className="space-y-4">
-              {isResumeMode && (
-                <div className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/30 rounded-xl flex items-center gap-2 text-emerald-400 animate-pulse">
+              {status.fileStatus === 'mixed' && (
+                <div className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/30 rounded-xl flex items-center gap-2 text-emerald-400 animate-in fade-in zoom-in-95">
                   <RefreshCw size={14} className="animate-spin-slow" />
-                  <span className="text-[9px] font-bold uppercase tracking-[0.2em]">Phát hiện file Mix - Sẵn sàng dịch tiếp</span>
+                  <span className="text-[9px] font-bold uppercase tracking-[0.2em]">✅ PHÁT HIỆN FILE MIX — SẴN SÀNG DỊCH TIẾP</span>
                 </div>
               )}
-              {!status.isTranslating && progressPercentage < 100 && (
+              {status.fileStatus === 'completed' && (
+                <div className="px-4 py-2 bg-indigo-500/10 border border-indigo-500/30 rounded-xl flex items-center gap-2 text-indigo-400 animate-in fade-in zoom-in-95">
+                  <CheckCircle2 size={14} />
+                  <span className="text-[9px] font-bold uppercase tracking-[0.2em]">✅ FILE ĐÃ HOÀN TẤT — KHÔNG CẦN DỊCH TIẾP</span>
+                </div>
+              )}
+
+              {!status.isTranslating && status.fileStatus !== 'completed' && (
                 <button onClick={startTranslation} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2 transition-all shadow-xl shadow-indigo-500/20 active:scale-[0.98]">
-                  <Play size={20} fill="currentColor" /> {isResumeMode ? 'Dịch tiếp phần còn lại' : 'Bắt đầu dịch ngay'}
+                  <Play size={20} fill="currentColor" /> {status.fileStatus === 'mixed' ? 'Dịch tiếp phần còn lại' : 'Bắt đầu dịch ngay'}
                 </button>
               )}
+
               {status.isTranslating && (
                 <div className="space-y-3 p-5 bg-slate-800/30 rounded-2xl border border-slate-700/50">
                   <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest text-slate-400">
@@ -264,15 +306,44 @@ const App: React.FC = () => {
                   </div>
                 </div>
               )}
-              {(isFinished || status.error) && (
-                <button onClick={() => downloadSRT(!isFinished)} className={`w-full ${isFinished ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-800 hover:bg-slate-700'} text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2 transition-all shadow-xl`}>
-                  <Download size={20} /> {isFinished ? 'Tải file hoàn thiện' : 'Tải file dở dang'}
-                </button>
-              )}
-              {status.error && (
-                <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl flex gap-3 text-red-400 text-xs">
-                  <AlertCircle size={18} className="shrink-0" /> <p className="font-medium leading-relaxed">{status.error}</p>
+
+              {status.interruption && (
+                <div className="p-6 bg-red-950/20 border border-red-500/30 rounded-3xl space-y-4 animate-in slide-in-from-bottom-2 duration-500">
+                  <div className="flex items-center gap-2 text-red-400 font-bold text-xs uppercase tracking-widest">
+                    <AlertCircle size={18} /> ⚠️ DỊCH BỊ GIÁN ĐOẠN
+                  </div>
+                  <div className="space-y-3 text-[11px] text-slate-300 border-t border-red-500/10 pt-3">
+                    <p><span className="text-red-400/80 font-bold">📌 NGUYÊN NHÂN:</span> {status.interruption.reason}</p>
+                    <div className="space-y-1">
+                      <p className="text-indigo-400 font-bold">📊 TIẾN ĐỘ ĐÃ HOÀN THÀNH:</p>
+                      <ul className="pl-4 space-y-1 opacity-80">
+                        <li>• Tổng số block trong file: {status.interruption.total}</li>
+                        <li>• Số block đã dịch sang tiếng Việt: {status.interruption.translated}</li>
+                        <li>• Số block còn tiếng Trung: {status.interruption.remaining}</li>
+                      </ul>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-amber-400 font-bold">📝 TRẠNG THÁI FILE ĐẦU RA:</p>
+                      <ul className="pl-4 space-y-1 opacity-80">
+                        <li>• File xuất ra hiện tại là “file dở dang” chứa cả VN + ZH</li>
+                        <li>• Người dùng có thể tải xuống và upload lại để dịch tiếp</li>
+                      </ul>
+                    </div>
+                    <div className="p-3 bg-red-500/5 border border-red-500/10 rounded-xl">
+                      <p className="text-slate-400 font-bold flex items-center gap-1"><Info size={12}/> HƯỚNG DẪN TIẾP TỤC:</p>
+                      <p className="opacity-70 mt-1">Tải file dở dang → chờ 1 phút → upload lại → bấm “Dịch tiếp phần còn lại”.</p>
+                    </div>
+                  </div>
+                  <button onClick={() => downloadSRT(true)} className="w-full py-3 bg-red-600 hover:bg-red-700 text-white rounded-2xl text-[10px] font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all">
+                    <FileDown size={16} /> Tải file dở dang (.SRT)
+                  </button>
                 </div>
+              )}
+
+              {status.fileStatus === 'completed' && !status.isTranslating && (
+                <button onClick={() => downloadSRT(false)} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2 transition-all shadow-xl">
+                  <Download size={20} /> Tải file hoàn thiện (.SRT)
+                </button>
               )}
             </div>
           </section>
@@ -283,9 +354,17 @@ const App: React.FC = () => {
             <h3 className="font-bold text-slate-400 text-[10px] uppercase tracking-[0.3em] flex items-center gap-3">
               <Activity size={18} className="text-indigo-500" /> Monitor Tiến trình Thực tế
             </h3>
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-xl">
-              <Cpu size={14} className="text-indigo-400" />
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Gemini Engine</span>
+            <div className="flex items-center gap-4">
+              {stats.totalTokens > 0 && (
+                <div className="flex items-center gap-2 text-[10px] text-slate-500 font-bold">
+                   <History size={14} className="text-indigo-400"/>
+                   <span>{stats.totalTokens.toLocaleString()} tokens</span>
+                </div>
+              )}
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-xl">
+                <Cpu size={14} className="text-indigo-400" />
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Gemini Engine</span>
+              </div>
             </div>
           </div>
           <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
@@ -304,7 +383,7 @@ const App: React.FC = () => {
                         <span className="bg-slate-800 px-2.5 py-1 rounded-lg text-indigo-400 border border-slate-700/50">#{block.index}</span>
                         <span className="opacity-50 tracking-tighter">{block.timestamp}</span>
                       </div>
-                      <p className="text-xs text-slate-400 font-serif-vi leading-relaxed">{block.originalText}</p>
+                      <p className="text-xs text-slate-400 font-serif-vi leading-relaxed line-clamp-4">{block.originalText}</p>
                     </div>
                     <div className="md:border-l border-slate-800 md:pl-8 space-y-3 flex flex-col justify-center min-h-[80px]">
                       <div className="flex justify-between items-center">

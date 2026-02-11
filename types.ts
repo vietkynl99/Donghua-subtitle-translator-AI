@@ -35,12 +35,21 @@ export interface SessionStats {
   translatedBlocks: number;
 }
 
+export interface InterruptionInfo {
+  reason: string;
+  total: number;
+  translated: number;
+  remaining: number;
+}
+
 export interface TranslationState {
   isTranslating: boolean;
   isAnalyzing: boolean;
   progress: number;
   total: number;
   error: string | null;
+  interruption: InterruptionInfo | null;
+  fileStatus: 'new' | 'mixed' | 'completed' | null;
   apiStatus: 'checking' | 'valid' | 'invalid' | 'unknown';
   selectedModel: string;
 }
