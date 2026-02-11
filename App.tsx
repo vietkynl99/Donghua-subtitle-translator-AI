@@ -15,17 +15,24 @@ import {
   ChevronRight, 
   Activity, 
   Cpu, 
-  BarChart3 
+  BarChart3,
+  Box
 } from 'lucide-react';
 import { TitleAnalysis, SubtitleBlock, TranslationState, SessionStats } from './types';
 import { parseSRT, stringifySRT } from './utils/srtParser';
 import { translateSubtitles, analyzeTitle, checkApiHealth } from './services/geminiService';
+
+const MODELS = [
+  { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', desc: 'Nhanh, Hiệu quả' },
+  { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro', desc: 'Chất lượng cao, Thông minh' },
+];
 
 const App: React.FC = () => {
   const [titleInput, setTitleInput] = useState<string>('');
   const [analysis, setAnalysis] = useState<TitleAnalysis | null>(null);
   const [blocks, setBlocks] = useState<SubtitleBlock[]>([]);
   const [fileName, setFileName] = useState<string>('');
+  const [isDragging, setIsDragging] = useState(false);
   const [stats, setStats] = useState<SessionStats>({
     requests: 0,
     totalTokens: 0,
@@ -37,25 +44,27 @@ const App: React.FC = () => {
     progress: 0,
     total: 0,
     error: null,
-    apiStatus: 'checking'
+    apiStatus: 'checking',
+    selectedModel: 'gemini-3-flash-preview'
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Check API health on mount
+  // Check API health on mount or model change
   useEffect(() => {
     const verifyKey = async () => {
-      const isValid = await checkApiHealth();
+      setStatus(prev => ({ ...prev, apiStatus: 'checking' }));
+      const isValid = await checkApiHealth(status.selectedModel);
       setStatus(prev => ({ ...prev, apiStatus: isValid ? 'valid' : 'invalid' }));
     };
     verifyKey();
-  }, []);
+  }, [status.selectedModel]);
 
   const handleAnalyzeTitle = async () => {
     if (!titleInput.trim() || status.isAnalyzing || status.isTranslating) return;
     setStatus(prev => ({ ...prev, isAnalyzing: true, error: null }));
     try {
-      const { analysis: result, tokens } = await analyzeTitle(titleInput);
+      const { analysis: result, tokens } = await analyzeTitle(titleInput, status.selectedModel);
       setAnalysis(result);
       setStats(prev => ({
         ...prev,
@@ -72,9 +81,11 @@ const App: React.FC = () => {
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processFile = (file: File) => {
+    if (!file.name.toLowerCase().endsWith('.srt')) {
+      setStatus(prev => ({ ...prev, error: "Chỉ chấp nhận file định dạng .SRT" }));
+      return;
+    }
 
     setFileName(file.name);
     const reader = new FileReader();
@@ -87,6 +98,28 @@ const App: React.FC = () => {
     reader.readAsText(file);
   };
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) processFile(file);
+  };
+
   const startTranslation = async () => {
     if (blocks.length === 0 || !analysis) return;
     
@@ -94,7 +127,7 @@ const App: React.FC = () => {
     let lastProgress = 0;
     
     try {
-      const translated = await translateSubtitles(blocks, analysis, (count, tokens) => {
+      const translated = await translateSubtitles(blocks, analysis, status.selectedModel, (count, tokens) => {
         const newlyTranslated = count - lastProgress;
         lastProgress = count;
         
@@ -167,6 +200,24 @@ const App: React.FC = () => {
           </div>
           
           <div className="flex items-center gap-4">
+             {/* Model Selector */}
+             <div className="hidden lg:flex items-center gap-2 p-1 bg-slate-800/80 border border-slate-700 rounded-xl">
+               {MODELS.map((m) => (
+                 <button
+                   key={m.id}
+                   onClick={() => setStatus(prev => ({ ...prev, selectedModel: m.id }))}
+                   disabled={status.isTranslating || status.isAnalyzing}
+                   className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${
+                     status.selectedModel === m.id 
+                       ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' 
+                       : 'text-slate-500 hover:text-slate-300'
+                   } disabled:opacity-50`}
+                 >
+                   {m.name}
+                 </button>
+               ))}
+             </div>
+
              {/* API Status Widget */}
              <div className="hidden sm:flex items-center gap-4 px-4 py-1.5 bg-slate-800/50 border border-slate-700 rounded-full">
                <div className="flex items-center gap-2 border-r border-slate-700 pr-4">
@@ -198,7 +249,7 @@ const App: React.FC = () => {
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-400/10 transition-all text-sm font-medium"
                >
                  <Trash2 size={16} />
-                 <span className="hidden md:inline">Xóa dữ liệu</span>
+                 <span className="hidden md:inline">Xóa</span>
                </button>
              )}
           </div>
@@ -222,6 +273,19 @@ const App: React.FC = () => {
             </h2>
             
             <div className="space-y-4">
+              {/* Mobile Model Selector */}
+              <div className="lg:hidden">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Chọn Model</label>
+                <select 
+                  value={status.selectedModel}
+                  onChange={(e) => setStatus(prev => ({ ...prev, selectedModel: e.target.value }))}
+                  disabled={status.isTranslating || status.isAnalyzing}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {MODELS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Dán tiêu đề tiếng Trung</label>
                 <div className="relative">
@@ -297,11 +361,20 @@ const App: React.FC = () => {
 
             {!fileName ? (
               <div 
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-slate-700 rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer hover:border-indigo-500 hover:bg-indigo-500/5 transition-all group"
+                className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer transition-all group ${
+                  isDragging 
+                    ? 'border-indigo-500 bg-indigo-500/10 scale-[1.02] shadow-[0_0_20px_rgba(99,102,241,0.2)]' 
+                    : 'border-slate-700 hover:border-indigo-500 hover:bg-indigo-500/5'
+                }`}
               >
-                <Upload className="text-slate-500 group-hover:text-indigo-400 mb-2 transition-colors" size={32} />
-                <p className="text-sm text-slate-300 font-medium">Chọn file .SRT</p>
+                <Upload className={`transition-all duration-300 ${isDragging ? 'text-indigo-400 scale-125 mb-4' : 'text-slate-500 group-hover:text-indigo-400 mb-2'}`} size={32} />
+                <p className={`text-sm font-medium transition-colors ${isDragging ? 'text-indigo-300' : 'text-slate-300'}`}>
+                  {isDragging ? 'Thả file vào đây' : 'Chọn hoặc kéo thả file .SRT'}
+                </p>
                 <input 
                   type="file" 
                   ref={fileInputRef} 
@@ -409,9 +482,11 @@ const App: React.FC = () => {
               Nội dung xem trước
             </h3>
             <div className="flex items-center gap-4">
-               <div className="flex items-center gap-1.5 text-slate-600">
+               <div className="flex items-center gap-1.5 text-slate-400">
                  <Cpu size={12} />
-                 <span className="text-[10px] font-bold">GEMINI 3 FLASH</span>
+                 <span className="text-[10px] font-bold uppercase tracking-wider">
+                   {MODELS.find(m => m.id === status.selectedModel)?.name}
+                 </span>
                </div>
                <div className="flex gap-2">
                  <div className="w-3 h-3 rounded-full bg-slate-800" />

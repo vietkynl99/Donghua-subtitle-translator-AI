@@ -41,4 +41,5 @@ export interface TranslationState {
   total: number;
   error: string | null;
   apiStatus: 'checking' | 'valid' | 'invalid' | 'unknown';
+  selectedModel: string;
 }

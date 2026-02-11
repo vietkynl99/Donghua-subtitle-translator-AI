@@ -7,11 +7,11 @@ export interface TranslationResult {
   tokens: number;
 }
 
-export const checkApiHealth = async (): Promise<boolean> => {
+export const checkApiHealth = async (model: string): Promise<boolean> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
     await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: model,
       contents: "hi",
       config: { maxOutputTokens: 1 }
     });
@@ -22,7 +22,7 @@ export const checkApiHealth = async (): Promise<boolean> => {
   }
 };
 
-export const analyzeTitle = async (title: string): Promise<{ analysis: TitleAnalysis, tokens: number }> => {
+export const analyzeTitle = async (title: string, model: string): Promise<{ analysis: TitleAnalysis, tokens: number }> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const prompt = `Phân tích tiêu đề phim hoạt hình Trung Quốc (Donghua) sau đây: "${title}"
   
@@ -39,7 +39,7 @@ Lưu ý: Tiêu đề dịch sang tiếng Việt phải mượt mà, đúng tinh 
 Các thể loại ưu tiên: Tu tiên cổ phong, Xuyên không – dị giới, Đô thị huyền bí, Quỷ dị, Hệ thống, Trọng sinh, Ngự thú, Thần thoại – Trảm thần, Hành động siêu năng lực.`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
+    model: model,
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -66,6 +66,7 @@ Các thể loại ưu tiên: Tu tiên cổ phong, Xuyên không – dị giới,
 export const translateSubtitles = async (
   blocks: SubtitleBlock[],
   analysis: TitleAnalysis,
+  model: string,
   onProgress: (translatedCount: number, tokensAdded: number) => void
 ): Promise<SubtitleBlock[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -97,7 +98,7 @@ HÃY TRẢ VỀ JSON THEO ĐÚNG CẤU TRÚC:
 
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: model,
         contents: prompt,
         config: {
           responseMimeType: "application/json",
