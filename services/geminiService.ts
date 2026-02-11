@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { SubtitleBlock, TitleAnalysis } from "../types";
 
 export interface TranslationResult {
@@ -7,14 +7,37 @@ export interface TranslationResult {
   tokens: number;
 }
 
+/**
+ * Helper to wrap API calls with exponential backoff for retryable errors (429, 5xx)
+ */
+const withRetry = async <T>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const errorStr = error?.toString() || "";
+    const isQuotaError = errorStr.includes("429") || errorStr.toLowerCase().includes("resource_exhausted") || errorStr.toLowerCase().includes("quota");
+    const isServerError = errorStr.includes("500") || errorStr.includes("503");
+
+    if (retries > 0 && (isQuotaError || isServerError)) {
+      console.warn(`Gemini API error (Retrying in ${delay}ms...):`, errorStr);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return withRetry(fn, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+};
+
 export const checkApiHealth = async (model: string): Promise<boolean> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
-    await ai.models.generateContent({
+    await withRetry(() => ai.models.generateContent({
       model: model,
       contents: "hi",
-      config: { maxOutputTokens: 1 }
-    });
+      config: { 
+        maxOutputTokens: 10,
+        thinkingConfig: { thinkingBudget: 0 } 
+      }
+    }));
     return true;
   } catch (e) {
     console.error("API Health Check Failed", e);
@@ -24,21 +47,37 @@ export const checkApiHealth = async (model: string): Promise<boolean> => {
 
 export const analyzeTitle = async (title: string, model: string): Promise<{ analysis: TitleAnalysis, tokens: number }> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const prompt = `Phân tích tiêu đề phim hoạt hình Trung Quốc (Donghua) sau đây: "${title}"
-  
+  const prompt = `Bạn là một AI chuyên phân tích tiêu đề phim hoạt hình Trung Quốc (Donghua) thể loại: tu tiên, xuyên không, hệ thống, quỷ dị, đô thị dị năng...
+
+Nhiệm vụ: Phân tích tiêu đề "${title}" để làm căn cứ định hướng cho việc dịch phụ đề sau này.
+
+QUY TẮC PHÂN TÍCH TỪ KHÓA (Gán nhãn thể loại):
+- 穿越, 重生, 转生 -> Xuyên không / Trùng sinh
+- 斩神, 神明, 神秘 -> Thần thoại / Dị giới
+- 系统, 进度条, 金手指 -> Hệ thống
+- 都市, 现代 -> Đô thị dị năng
+- 诡异, 禁忌, 恐怖 -> Quỷ dị / Kinh dị nhẹ
+- 修仙, 仙侠 -> Tu tiên / Tiên hiệp
+
+YÊU CẦU ĐẦU RA (JSON):
+1. Tiêu đề tiếng Việt: Viết lại hấp dẫn, tự nhiên (phong cách Bilibili/Douyin).
+2. Tóm truyện: 1-2 câu ngắn gọn, đúng tinh thần tiêu đề.
+3. Phong cách dịch subtitle: Phải chọn chính xác 1 trong các nhãn sau: "Hài hước châm biếm", "Nghiêm túc huyền huyễn", "Drama cảm xúc", "Đậm chất tu tiên cổ phong", "Hiện đại – meme – trẻ trung". Giải thích ngắn gọn lý do chọn.
+
 HÃY TRẢ VỀ JSON THEO CẤU TRÚC:
 {
   "originalTitle": "tiêu đề gốc",
-  "translatedTitle": "tiêu đề dịch sang tiếng Việt (tự nhiên, dễ hiểu, giữ đúng ý và phong cách clickbait nếu có)",
+  "translatedTitle": "tiêu đề tiếng Việt sáng tạo",
   "mainGenres": ["thể loại 1", "thể loại 2"],
-  "tone": "Hài hước / Nghiêm túc / Nửa hài nửa nghiêm / Dark fantasy",
-  "recommendedStyle": "Mô tả phong cách dịch (ví dụ: hiện đại gãy gọn / cổ phong trang trọng...)"
+  "summary": "Tóm tắt cốt truyện ngắn gọn.",
+  "tone": "Tông truyện chính",
+  "recommendedStyle": "Chọn 1 trong 5 nhãn phong cách nêu trên và giải thích lý do."
 }
 
-Lưu ý: Tiêu đề dịch sang tiếng Việt phải mượt mà, đúng tinh thần gốc, không dịch word-by-word cứng nhắc.
-Các thể loại ưu tiên: Tu tiên cổ phong, Xuyên không – dị giới, Đô thị huyền bí, Quỷ dị, Hệ thống, Trọng sinh, Ngự thú, Thần thoại – Trảm thần, Hành động siêu năng lực.`;
+Lưu ý: Tránh dùng từ quá học thuật, ưu tiên cách diễn đạt gần gũi với người xem mạng xã hội.`;
 
-  const response = await ai.models.generateContent({
+  // Fix: Explicitly type the response to avoid property access errors on 'unknown'
+  const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
     model: model,
     contents: prompt,
     config: {
@@ -49,16 +88,17 @@ Các thể loại ưu tiên: Tu tiên cổ phong, Xuyên không – dị giới,
           originalTitle: { type: Type.STRING },
           translatedTitle: { type: Type.STRING },
           mainGenres: { type: Type.ARRAY, items: { type: Type.STRING } },
+          summary: { type: Type.STRING },
           tone: { type: Type.STRING },
           recommendedStyle: { type: Type.STRING }
         },
-        required: ["originalTitle", "translatedTitle", "mainGenres", "tone", "recommendedStyle"]
+        required: ["originalTitle", "translatedTitle", "mainGenres", "summary", "tone", "recommendedStyle"]
       }
     }
-  });
+  }));
 
   return {
-    analysis: JSON.parse(response.text),
+    analysis: JSON.parse(response.text || "{}"),
     tokens: response.usageMetadata?.totalTokenCount || 0
   };
 };
@@ -70,34 +110,41 @@ export const translateSubtitles = async (
   onProgress: (translatedCount: number, tokensAdded: number) => void
 ): Promise<SubtitleBlock[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const CHUNK_SIZE = 15;
+  const CHUNK_SIZE = 8; // Slightly smaller chunk size to stay safer within per-minute token limits
   const translatedBlocks: SubtitleBlock[] = [...blocks];
 
   for (let i = 0; i < blocks.length; i += CHUNK_SIZE) {
     const chunk = blocks.slice(i, i + CHUNK_SIZE);
+    const pendingInChunk = chunk.filter(b => !b.translatedText || /[\u4e00-\u9fa5]/.test(b.translatedText || ''));
     
-    const prompt = `Bạn là một AI chuyên dịch phụ đề phim hoạt hình Trung Quốc sang tiếng Việt chuyên nghiệp.
-Tiêu đề phim: ${analysis.originalTitle} (${analysis.translatedTitle})
-Thể loại: ${analysis.mainGenres.join(", ")}
-Tông truyện: ${analysis.tone}
-Phong cách dịch khuyến nghị: ${analysis.recommendedStyle}
+    if (pendingInChunk.length === 0) {
+      onProgress(Math.min(i + CHUNK_SIZE, blocks.length), 0);
+      continue;
+    }
 
-NHIỆM VỤ: Dịch các nội dung sau sang tiếng Việt tự nhiên, giữ nguyên định dạng.
+    const prompt = `Bạn là chuyên gia dịch thuật phụ đề Donghua.
+Bối cảnh phim: "${analysis.translatedTitle}" (${analysis.originalTitle})
+Tóm tắt nội dung: ${analysis.summary}
+Phong cách dịch bắt buộc: ${analysis.recommendedStyle}
 
-NGUYÊN TẮC BẮT BUỘC:
-1. Dịch sát nghĩa nhưng phải tự nhiên như người Việt nói chuyện.
-2. KHÔNG thay đổi timestamp hoặc index.
-3. Sử dụng đúng thuật ngữ Hán-Việt cho tu tiên/huyền huyễn (ví dụ: Đại năng, Tông môn, Trúc cơ, Linh hồn lực...).
-4. Ưu tiên: 修仙->Tu tiên, 穿越->Xuyên không, 系统->Hệ thống, 重生->Trọng sinh, 灵气->Linh khí, 法宝->Pháp bảo, 妖兽->Yêu thú, 秘境->Bí cảnh, 渡劫->Độ kiếp, 天劫->Thiên kiếp.
+NHIỆM VỤ: Dịch hoặc hoàn thiện nội dung SRT sang tiếng Việt 100%.
 
-DỮ LIỆU CẦN DỊCH (JSON format):
-${JSON.stringify(chunk.map(b => ({ id: b.index, text: b.originalText })))}
+NGUYÊN TẮC:
+1. Tuân thủ phong cách ${analysis.recommendedStyle} xuyên suốt.
+2. Dòng chỉ có tiếng Trung: Dịch hoàn toàn.
+3. Dòng Mix Việt-Trung: Chỉ dịch nốt phần Trung còn thiếu.
+4. Dòng đã là tiếng Việt: GIỮ NGUYÊN TUYỆT ĐỐI.
+5. Thuật ngữ Hán Việt: 修仙->Tu tiên, 系统->Hệ thống, 渡劫->Độ kiếp...
 
-HÃY TRẢ VỀ JSON THEO ĐÚNG CẤU TRÚC:
-[{"id": "index", "translated": "văn bản đã dịch"}]`;
+DỮ LIỆU CẦN XỬ LÝ (JSON):
+${JSON.stringify(pendingInChunk.map(b => ({ id: b.index, text: b.originalText })))}
+
+TRẢ VỀ JSON FORMAT:
+[{"id": "index", "translated": "kết quả dịch hoàn thiện"}]`;
 
     try {
-      const response = await ai.models.generateContent({
+      // Fix: Explicitly type the response to avoid property access errors on 'unknown'
+      const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
         model: model,
         contents: prompt,
         config: {
@@ -114,9 +161,9 @@ HÃY TRẢ VỀ JSON THEO ĐÚNG CẤU TRÚC:
             }
           }
         }
-      });
+      }));
 
-      const results = JSON.parse(response.text);
+      const results = JSON.parse(response.text || "[]");
       const tokens = response.usageMetadata?.totalTokenCount || 0;
       
       results.forEach((res: { id: string, translated: string }) => {
@@ -127,6 +174,10 @@ HÃY TRẢ VỀ JSON THEO ĐÚNG CẤU TRÚC:
       });
 
       onProgress(Math.min(i + CHUNK_SIZE, blocks.length), tokens);
+      
+      // Added a small mandatory artificial delay between chunks to further prevent 429
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
     } catch (error) {
       console.error("Translation error at chunk", i, error);
       throw error;

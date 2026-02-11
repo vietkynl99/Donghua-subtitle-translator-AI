@@ -17,6 +17,7 @@ export interface TitleAnalysis {
   originalTitle: string;
   translatedTitle: string;
   mainGenres: string[];
+  summary: string;
   tone: string;
   recommendedStyle: string;
 }
