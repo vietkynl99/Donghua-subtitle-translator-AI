@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Upload, 
   Download, 
@@ -7,40 +7,66 @@ import {
   Settings, 
   CheckCircle2, 
   AlertCircle, 
-  Loader2,
-  Trash2,
-  FileText,
-  Search,
-  Sparkles,
-  ChevronRight
+  Loader2, 
+  Trash2, 
+  FileText, 
+  Search, 
+  Sparkles, 
+  ChevronRight, 
+  Activity, 
+  Cpu, 
+  BarChart3 
 } from 'lucide-react';
-import { TitleAnalysis, SubtitleBlock, TranslationState } from './types';
+import { TitleAnalysis, SubtitleBlock, TranslationState, SessionStats } from './types';
 import { parseSRT, stringifySRT } from './utils/srtParser';
-import { translateSubtitles, analyzeTitle } from './services/geminiService';
+import { translateSubtitles, analyzeTitle, checkApiHealth } from './services/geminiService';
 
 const App: React.FC = () => {
   const [titleInput, setTitleInput] = useState<string>('');
   const [analysis, setAnalysis] = useState<TitleAnalysis | null>(null);
   const [blocks, setBlocks] = useState<SubtitleBlock[]>([]);
   const [fileName, setFileName] = useState<string>('');
+  const [stats, setStats] = useState<SessionStats>({
+    requests: 0,
+    totalTokens: 0,
+    translatedBlocks: 0
+  });
   const [status, setStatus] = useState<TranslationState>({
     isTranslating: false,
     isAnalyzing: false,
     progress: 0,
     total: 0,
     error: null,
+    apiStatus: 'checking'
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Check API health on mount
+  useEffect(() => {
+    const verifyKey = async () => {
+      const isValid = await checkApiHealth();
+      setStatus(prev => ({ ...prev, apiStatus: isValid ? 'valid' : 'invalid' }));
+    };
+    verifyKey();
+  }, []);
+
   const handleAnalyzeTitle = async () => {
-    if (!titleInput.trim()) return;
+    if (!titleInput.trim() || status.isAnalyzing || status.isTranslating) return;
     setStatus(prev => ({ ...prev, isAnalyzing: true, error: null }));
     try {
-      const result = await analyzeTitle(titleInput);
+      const { analysis: result, tokens } = await analyzeTitle(titleInput);
       setAnalysis(result);
+      setStats(prev => ({
+        ...prev,
+        requests: prev.requests + 1,
+        totalTokens: prev.totalTokens + tokens
+      }));
     } catch (err: any) {
-      setStatus(prev => ({ ...prev, error: "Không thể phân tích tiêu đề. Vui lòng thử lại." }));
+      const msg = err.message?.includes('401') || err.message?.includes('403') 
+        ? "API Key không hợp lệ hoặc đã hết hạn." 
+        : "Lỗi phân tích tiêu đề.";
+      setStatus(prev => ({ ...prev, error: msg }));
     } finally {
       setStatus(prev => ({ ...prev, isAnalyzing: false }));
     }
@@ -65,18 +91,31 @@ const App: React.FC = () => {
     if (blocks.length === 0 || !analysis) return;
     
     setStatus(prev => ({ ...prev, isTranslating: true, progress: 0, error: null }));
+    let lastProgress = 0;
     
     try {
-      const translated = await translateSubtitles(blocks, analysis, (count) => {
+      const translated = await translateSubtitles(blocks, analysis, (count, tokens) => {
+        const newlyTranslated = count - lastProgress;
+        lastProgress = count;
+        
         setStatus(prev => ({ ...prev, progress: count }));
+        setStats(prev => ({
+          ...prev,
+          requests: prev.requests + 1,
+          totalTokens: prev.totalTokens + tokens,
+          translatedBlocks: prev.translatedBlocks + newlyTranslated
+        }));
       });
       setBlocks(translated);
       setStatus(prev => ({ ...prev, isTranslating: false }));
     } catch (err: any) {
+      const msg = err.message?.includes('429') 
+        ? "Quá giới hạn yêu cầu (Rate Limit). Vui lòng đợi một lát." 
+        : "Dịch thuật thất bại. " + (err.message || "");
       setStatus(prev => ({ 
         ...prev, 
         isTranslating: false, 
-        error: "Dịch thuật thất bại. " + (err.message || "") 
+        error: msg 
       }));
     }
   };
@@ -97,13 +136,14 @@ const App: React.FC = () => {
     setFileName('');
     setAnalysis(null);
     setTitleInput('');
-    setStatus({
+    setStatus(prev => ({
+      ...prev,
       isTranslating: false,
       isAnalyzing: false,
       progress: 0,
       total: 0,
       error: null,
-    });
+    }));
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -127,13 +167,38 @@ const App: React.FC = () => {
           </div>
           
           <div className="flex items-center gap-4">
+             {/* API Status Widget */}
+             <div className="hidden sm:flex items-center gap-4 px-4 py-1.5 bg-slate-800/50 border border-slate-700 rounded-full">
+               <div className="flex items-center gap-2 border-r border-slate-700 pr-4">
+                 <div className={`w-2 h-2 rounded-full ${
+                   status.apiStatus === 'valid' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' :
+                   status.apiStatus === 'invalid' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]' :
+                   'bg-slate-500 animate-pulse'
+                 }`} />
+                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                   {status.apiStatus === 'valid' ? 'API Active' : 
+                    status.apiStatus === 'invalid' ? 'API Error' : 'Checking API'}
+                 </span>
+               </div>
+               <div className="flex items-center gap-4">
+                 <div className="flex flex-col">
+                   <span className="text-[8px] text-slate-500 font-bold uppercase">Tokens</span>
+                   <span className="text-[10px] font-mono text-indigo-400">{(stats.totalTokens / 1000).toFixed(1)}k</span>
+                 </div>
+                 <div className="flex flex-col">
+                   <span className="text-[8px] text-slate-500 font-bold uppercase">Requests</span>
+                   <span className="text-[10px] font-mono text-indigo-400">{stats.requests}</span>
+                 </div>
+               </div>
+             </div>
+
              {(blocks.length > 0 || analysis) && !status.isTranslating && (
                <button 
                 onClick={clearAll}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-400/10 transition-all text-sm font-medium"
                >
                  <Trash2 size={16} />
-                 Xóa dữ liệu
+                 <span className="hidden md:inline">Xóa dữ liệu</span>
                </button>
              )}
           </div>
@@ -164,6 +229,11 @@ const App: React.FC = () => {
                     type="text"
                     value={titleInput}
                     onChange={(e) => setTitleInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleAnalyzeTitle();
+                      }
+                    }}
                     placeholder="Ví dụ: 凡人修仙传 / Thần Lan Kỳ Vực..."
                     disabled={status.isTranslating || status.isAnalyzing}
                     className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-4 pr-12 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm"
@@ -299,9 +369,35 @@ const App: React.FC = () => {
             {status.error && (
               <div className="mt-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-start gap-3 text-red-400">
                 <AlertCircle size={18} className="shrink-0 mt-0.5" />
-                <p className="text-xs leading-relaxed">{status.error}</p>
+                <p className="text-xs leading-relaxed font-medium">{status.error}</p>
               </div>
             )}
+          </section>
+
+          {/* Session Summary Statistics */}
+          <section className="bg-slate-900/50 border border-slate-800 rounded-2xl p-4 shadow-xl">
+             <div className="flex items-center gap-2 mb-3">
+                <BarChart3 className="text-slate-500" size={14} />
+                <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Thống kê phiên làm việc</h3>
+             </div>
+             <div className="grid grid-cols-3 gap-2">
+                <div className="bg-slate-900 p-2 rounded-lg border border-slate-800/50">
+                   <div className="text-[8px] text-slate-500 uppercase font-bold mb-1">Dòng dịch</div>
+                   <div className="text-sm font-mono text-indigo-400">{stats.translatedBlocks}</div>
+                </div>
+                <div className="bg-slate-900 p-2 rounded-lg border border-slate-800/50">
+                   <div className="text-[8px] text-slate-500 uppercase font-bold mb-1">Dung lượng</div>
+                   <div className="text-sm font-mono text-indigo-400">{(stats.totalTokens / 1000).toFixed(1)}k</div>
+                </div>
+                <div className="bg-slate-900 p-2 rounded-lg border border-slate-800/50">
+                   <div className="text-[8px] text-slate-500 uppercase font-bold mb-1">Truy vấn</div>
+                   <div className="text-sm font-mono text-indigo-400">{stats.requests}</div>
+                </div>
+             </div>
+             <div className="mt-3 flex items-center gap-2 text-[8px] text-slate-600">
+                <Activity size={10} />
+                <span>Số liệu được tính toán dựa trên phản hồi từ AI.</span>
+             </div>
           </section>
         </div>
 
@@ -312,10 +408,16 @@ const App: React.FC = () => {
               <FileText size={14} />
               Nội dung xem trước
             </h3>
-            <div className="flex gap-2">
-               <div className="w-3 h-3 rounded-full bg-slate-800" />
-               <div className="w-3 h-3 rounded-full bg-slate-800" />
-               <div className="w-3 h-3 rounded-full bg-slate-800" />
+            <div className="flex items-center gap-4">
+               <div className="flex items-center gap-1.5 text-slate-600">
+                 <Cpu size={12} />
+                 <span className="text-[10px] font-bold">GEMINI 3 FLASH</span>
+               </div>
+               <div className="flex gap-2">
+                 <div className="w-3 h-3 rounded-full bg-slate-800" />
+                 <div className="w-3 h-3 rounded-full bg-slate-800" />
+                 <div className="w-3 h-3 rounded-full bg-slate-800" />
+               </div>
             </div>
           </div>
 

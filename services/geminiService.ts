@@ -1,8 +1,28 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { Genre, SubtitleBlock, TitleAnalysis } from "../types";
+import { SubtitleBlock, TitleAnalysis } from "../types";
 
-export const analyzeTitle = async (title: string): Promise<TitleAnalysis> => {
+export interface TranslationResult {
+  blocks: SubtitleBlock[];
+  tokens: number;
+}
+
+export const checkApiHealth = async (): Promise<boolean> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  try {
+    await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: "hi",
+      config: { maxOutputTokens: 1 }
+    });
+    return true;
+  } catch (e) {
+    console.error("API Health Check Failed", e);
+    return false;
+  }
+};
+
+export const analyzeTitle = async (title: string): Promise<{ analysis: TitleAnalysis, tokens: number }> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const prompt = `Phân tích tiêu đề phim hoạt hình Trung Quốc (Donghua) sau đây: "${title}"
   
@@ -37,13 +57,16 @@ Các thể loại ưu tiên: Tu tiên cổ phong, Xuyên không – dị giới,
     }
   });
 
-  return JSON.parse(response.text);
+  return {
+    analysis: JSON.parse(response.text),
+    tokens: response.usageMetadata?.totalTokenCount || 0
+  };
 };
 
 export const translateSubtitles = async (
   blocks: SubtitleBlock[],
   analysis: TitleAnalysis,
-  onProgress: (translatedCount: number) => void
+  onProgress: (translatedCount: number, tokensAdded: number) => void
 ): Promise<SubtitleBlock[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const CHUNK_SIZE = 15;
@@ -93,6 +116,7 @@ HÃY TRẢ VỀ JSON THEO ĐÚNG CẤU TRÚC:
       });
 
       const results = JSON.parse(response.text);
+      const tokens = response.usageMetadata?.totalTokenCount || 0;
       
       results.forEach((res: { id: string, translated: string }) => {
         const indexInMain = translatedBlocks.findIndex(b => b.index === res.id);
@@ -101,7 +125,7 @@ HÃY TRẢ VỀ JSON THEO ĐÚNG CẤU TRÚC:
         }
       });
 
-      onProgress(Math.min(i + CHUNK_SIZE, blocks.length));
+      onProgress(Math.min(i + CHUNK_SIZE, blocks.length), tokens);
     } catch (error) {
       console.error("Translation error at chunk", i, error);
       throw error;

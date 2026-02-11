@@ -28,10 +28,17 @@ export interface SubtitleBlock {
   translatedText?: string;
 }
 
+export interface SessionStats {
+  requests: number;
+  totalTokens: number;
+  translatedBlocks: number;
+}
+
 export interface TranslationState {
   isTranslating: boolean;
   isAnalyzing: boolean;
   progress: number;
   total: number;
   error: string | null;
+  apiStatus: 'checking' | 'valid' | 'invalid' | 'unknown';
 }
