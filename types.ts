@@ -46,11 +46,7 @@ export interface HybridOptimizeSuggestion {
   afterText: string;
   status: 'pending' | 'processing' | 'applied' | 'error';
   error?: string;
-}
-
-export interface HybridOptimizeStats {
-  total: number;
-  aiRequired: number;
+  appliedAt?: number; // For highlight effect
 }
 
 export interface SessionStats {

@@ -21,7 +21,7 @@ const AI_MODELS = [
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'translator' | 'hybrid-optimize'>('translator');
   
-  // States
+  // Translator States
   const [blocks, setBlocks] = useState<SubtitleBlock[]>([]);
   const [fileName, setFileName] = useState<string>('');
   const [analysis, setAnalysis] = useState<TitleAnalysis | null>(null);
@@ -140,7 +140,7 @@ const App: React.FC = () => {
       setAiRequiredList(result.aiRequiredSegments);
       setIsQuickAnalyzing(false);
       setOptimizeStep(2);
-    }, 700);
+    }, 800);
   };
 
   const applyOptimize = async () => {
@@ -153,11 +153,11 @@ const App: React.FC = () => {
     cancelFlagRef.current = false;
 
     try {
-      // 1. Transparently apply Local Fixes (20-40 CPS)
+      // 1. Transparently apply Local Fixes (20-40 CPS range)
       const updatedWithLocal = applyLocalFixesOnly(blocks);
       setBlocks(updatedWithLocal);
 
-      // 2. Process AI required list (>40 CPS) in chunks
+      // 2. Process AI required list (>40 CPS) in chunks for real-time update
       if (aiRequiredList.length > 0) {
         const BATCH_SIZE = 4;
         const total = aiRequiredList.length;
@@ -169,12 +169,15 @@ const App: React.FC = () => {
           }
 
           const batch = aiRequiredList.slice(i, i + BATCH_SIZE);
-          batch.forEach(s => { if(s.status === 'pending') s.status = 'processing'; });
-          setAiRequiredList([...aiRequiredList]);
+          // Mark as processing immediately for UI feedback
+          setAiRequiredList(prev => prev.map(s => 
+            batch.some(b => b.index === s.index) ? { ...s, status: 'processing' } : s
+          ));
 
           try {
             const results = await optimizeHighCpsBatch(batch, updatedWithLocal, status.selectedModel);
             
+            // Apply immediately to the global blocks state for "Download Current File" support
             setBlocks(prev => {
               const next = [...prev];
               results.forEach(res => {
@@ -187,28 +190,39 @@ const App: React.FC = () => {
               return next;
             });
 
+            // Update local list with results and highlight time
             setAiRequiredList(prev => prev.map(s => {
               const res = results.find(r => r.id === s.index);
-              return res ? { ...s, status: 'applied', afterText: res.afterText, afterTimestamp: res.afterTimestamp } : s;
+              return res ? { 
+                ...s, 
+                status: 'applied', 
+                afterText: res.afterText, 
+                afterTimestamp: res.afterTimestamp,
+                appliedAt: Date.now()
+              } : s;
             }));
 
             setAiProgress(Math.min(i + BATCH_SIZE, total));
+            // Tiny delay to ensure UI cycles
+            await new Promise(r => setTimeout(r, 100));
           } catch (batchErr: any) {
-            console.error("Batch Optimization Error:", batchErr);
-            setOptimizeError(batchErr.message || "Unknown API Error");
-            setAiRequiredList(prev => prev.map(s => batch.some(b => b.index === s.index) ? { ...s, status: 'error', error: batchErr.message } : s));
-            // Stop processing further batches if error is critical
+            console.error("Optimization Batch Error:", batchErr);
+            const errMsg = batchErr.message || "Network Error / API Limit";
+            setOptimizeError(errMsg);
+            setAiRequiredList(prev => prev.map(s => 
+              batch.some(b => b.index === s.index) ? { ...s, status: 'error', error: errMsg } : s
+            ));
             break;
           }
         }
       }
 
       if (!cancelFlagRef.current && !optimizeError) {
-        alert("Đã hoàn tất tối ưu hóa toàn bộ (Toán học + AI)!");
+        // Success notification is handled by UI state change
       }
     } catch (err: any) {
       console.error(err);
-      setOptimizeError(err.message || "Failed to start AI optimization");
+      setOptimizeError(err.message || "Failed to start optimization");
     } finally {
       setIsAiProcessing(false);
     }
@@ -305,7 +319,7 @@ const App: React.FC = () => {
                       </div>
                     )}
                     {status.fileStatus === 'completed' && (
-                      <button onClick={() => downloadSRT()} className="w-full bg-emerald-600 hover:bg-emerald-700 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 transition-all">
+                      <button onClick={() => downloadSRT()} className="w-full bg-emerald-600 hover:bg-emerald-700 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 transition-all shadow-lg shadow-emerald-500/20">
                         <Download size={22} /> Tải file đã dịch
                       </button>
                     )}
@@ -314,8 +328,8 @@ const App: React.FC = () => {
               </section>
             </div>
 
-            <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-[2.5rem] flex flex-col h-full overflow-hidden shadow-2xl">
-              <div className="p-5 border-b border-slate-800 flex justify-between items-center px-10 bg-slate-900/90 backdrop-blur-xl">
+            <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-[2.5rem] flex flex-col h-full overflow-hidden shadow-2xl relative">
+              <div className="p-5 border-b border-slate-800 flex justify-between items-center px-10 bg-slate-900/90 backdrop-blur-xl sticky top-0 z-10">
                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.3em]">Subtitle Monitor</span>
               </div>
               <div className="flex-1 overflow-y-auto p-8 space-y-5 custom-scrollbar bg-slate-950/20">
@@ -347,29 +361,29 @@ const App: React.FC = () => {
         {activeTab === 'hybrid-optimize' && (
           <div className="space-y-6 animate-in fade-in duration-500 flex-1 overflow-y-auto custom-scrollbar">
             {blocks.length === 0 ? (
-               <section className="bg-slate-900 border border-slate-800 rounded-[3rem] p-16 text-center max-w-3xl mx-auto shadow-2xl my-12">
+               <section className="bg-slate-900 border border-slate-800 rounded-[3rem] p-16 text-center max-w-3xl mx-auto shadow-2xl my-12 animate-in slide-in-from-bottom-10">
                   <div 
                     onClick={() => fileInputRef.current?.click()} 
                     onDragOver={handleDragOver}
                     onDragLeave={handleDragLeave}
                     onDrop={handleDrop}
-                    className="border-2 border-dashed border-slate-700 rounded-[2.5rem] p-20 flex flex-col items-center justify-center cursor-pointer hover:border-indigo-500 transition-all duration-500"
+                    className="border-2 border-dashed border-slate-700 rounded-[2.5rem] p-20 flex flex-col items-center justify-center cursor-pointer hover:border-indigo-500 transition-all duration-500 group"
                   >
-                    <div className="w-24 h-24 bg-indigo-600/10 rounded-[2rem] flex items-center justify-center mb-8 border border-indigo-500/20">
+                    <div className="w-24 h-24 bg-indigo-600/10 rounded-[2rem] flex items-center justify-center mb-8 border border-indigo-500/20 group-hover:scale-110 transition-transform">
                       <Zap className="text-indigo-400" size={48} />
                     </div>
                     <h2 className="text-3xl font-bold mb-4 tracking-tight">Hybrid Optimizer</h2>
                     <p className="text-slate-400 text-sm mb-10 leading-relaxed max-w-md mx-auto">
                       Tối ưu hóa CPS thông minh: Toán học an toàn cho 20-40 CPS, AI chuyên sâu cho &gt;40 CPS.
                     </p>
-                    <div className="flex items-center gap-3 bg-indigo-600 px-10 py-5 rounded-2xl font-bold text-white shadow-2xl shadow-indigo-600/30 hover:bg-indigo-700 transition-all">
+                    <div className="flex items-center gap-3 bg-indigo-600 px-10 py-5 rounded-2xl font-bold text-white shadow-2xl shadow-indigo-600/30 hover:bg-indigo-700 transition-all active:scale-95">
                       <MousePointer2 size={24} /> Chọn file SRT
                     </div>
                   </div>
                </section>
             ) : optimizeStep === 1 ? (
-              <section className="bg-slate-900 border border-slate-800 rounded-[3rem] p-16 text-center max-w-3xl mx-auto shadow-2xl my-12">
-                <div className="w-24 h-24 bg-indigo-600/10 rounded-[2rem] flex items-center justify-center mx-auto mb-8 border border-indigo-500/20">
+              <section className="bg-slate-900 border border-slate-800 rounded-[3rem] p-16 text-center max-w-3xl mx-auto shadow-2xl my-12 animate-in zoom-in-95">
+                <div className="w-24 h-24 bg-indigo-600/10 rounded-[2rem] flex items-center justify-center mx-auto mb-8 border border-indigo-500/20 shadow-inner">
                   <Gauge className="text-indigo-400" size={48} />
                 </div>
                 <h2 className="text-3xl font-bold mb-5 tracking-tight">Quick Analyze {fileName}</h2>
@@ -384,23 +398,26 @@ const App: React.FC = () => {
                 </div>
               </section>
             ) : (
-              <div className="space-y-8 max-w-5xl mx-auto pb-12">
+              <div className="space-y-8 max-w-5xl mx-auto pb-12 animate-in slide-in-from-bottom-4 duration-500">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="bg-slate-900/50 backdrop-blur-md p-8 rounded-[2.5rem] border border-slate-800 text-center shadow-lg hover:border-red-500/20 transition-all group">
-                    <p className="text-[11px] text-slate-500 uppercase font-bold mb-2 tracking-[0.2em] group-hover:text-red-400">AI REQUIRED SEGMENTS</p>
-                    <p className="text-4xl font-black text-red-500">{aiRequiredList.length}</p>
-                    <p className="text-[10px] text-slate-600 mt-2 italic">(&gt; 40 CPS — Needs AI Rewriting)</p>
+                  <div className="bg-slate-900/50 backdrop-blur-md p-8 rounded-[2.5rem] border border-slate-800 text-center shadow-lg hover:border-red-500/20 transition-all group relative overflow-hidden">
+                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                      <Brain size={64} />
+                    </div>
+                    <p className="text-[11px] text-slate-500 uppercase font-bold mb-2 tracking-[0.2em] group-hover:text-red-400 transition-colors">AI REQUIRED SEGMENTS</p>
+                    <p className="text-5xl font-black text-red-500 tracking-tighter">{aiRequiredList.length}</p>
+                    <p className="text-[10px] text-slate-600 mt-2 italic">(&gt; 40 CPS — Needs AI Contextual Rewrite)</p>
                   </div>
-                  <div className="bg-slate-900/50 backdrop-blur-md p-8 rounded-[2.5rem] border border-slate-800 text-center shadow-lg">
+                  <div className="bg-slate-900/50 backdrop-blur-md p-8 rounded-[2.5rem] border border-slate-800 text-center shadow-lg hover:border-indigo-500/20 transition-all">
                     <div className="flex flex-col h-full justify-center">
-                      <p className="text-slate-400 text-xs mb-6">Local math fixes for 20-40 CPS will be applied transparently.</p>
+                      <p className="text-slate-400 text-xs mb-8">Local math fixes (20-40 CPS) applied in realtime to working copy.</p>
                       <div className="flex gap-3 justify-center">
                          {!isAiProcessing ? (
                             <button onClick={applyOptimize} className="flex-1 px-8 py-5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-2xl flex items-center justify-center gap-3 shadow-2xl shadow-red-600/30 transition-all active:scale-95">
                                <Brain size={24} /> APPLY AI OPTIMIZE
                             </button>
                          ) : (
-                            <button onClick={cancelOptimize} className="flex-1 px-8 py-5 bg-slate-800 text-red-400 font-bold rounded-2xl border border-red-500/30 flex items-center justify-center gap-3 hover:bg-red-500/5 transition-all">
+                            <button onClick={cancelOptimize} className="flex-1 px-8 py-5 bg-slate-800 text-red-400 font-bold rounded-2xl border border-red-500/30 flex items-center justify-center gap-3 hover:bg-red-500/10 transition-all active:scale-95">
                                <XCircle size={22} /> Cancel Optimize
                             </button>
                          )}
@@ -410,29 +427,32 @@ const App: React.FC = () => {
                 </div>
 
                 {isAiProcessing && (
-                  <div className="bg-slate-900/80 p-6 rounded-3xl border border-red-500/20 animate-pulse shadow-2xl">
-                    <div className="flex justify-between items-center mb-4 px-2">
-                       <p className="text-xs font-bold text-red-400 uppercase tracking-widest flex items-center gap-2">
-                         <Activity size={16} /> Processing {aiProgress} / {aiRequiredList.length} segments...
+                  <div className="bg-slate-900/80 p-8 rounded-3xl border border-red-500/20 animate-pulse shadow-2xl shadow-red-500/5">
+                    <div className="flex justify-between items-center mb-6 px-2">
+                       <p className="text-xs font-bold text-red-400 uppercase tracking-[0.2em] flex items-center gap-3">
+                         <Activity size={18} /> Processing {aiProgress} / {aiRequiredList.length} segments...
                        </p>
                        <span className="text-xs font-mono font-bold text-red-400">{Math.round((aiProgress / aiRequiredList.length) * 100)}%</span>
                     </div>
-                    <div className="h-3 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
-                      <div className="h-full bg-gradient-to-r from-red-500 to-amber-500 transition-all duration-1000 ease-out" style={{ width: `${(aiProgress / aiRequiredList.length) * 100}%` }} />
+                    <div className="h-4 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                      <div className="h-full bg-gradient-to-r from-red-600 via-orange-500 to-amber-400 transition-all duration-1000 ease-out" style={{ width: `${(aiProgress / aiRequiredList.length) * 100}%` }} />
                     </div>
                   </div>
                 )}
 
                 {(isCancelled || optimizeError) && (
-                  <div className={`p-6 rounded-3xl border shadow-xl flex items-start gap-4 animate-in slide-in-from-top-4 ${optimizeError ? 'bg-red-500/10 border-red-500/30' : 'bg-amber-500/10 border-amber-500/30'}`}>
-                    {optimizeError ? <ShieldAlert className="text-red-500 flex-shrink-0" size={24} /> : <XCircle className="text-amber-500 flex-shrink-0" size={24} />}
-                    <div>
-                      <p className={`font-bold uppercase text-xs tracking-widest mb-1 ${optimizeError ? 'text-red-500' : 'text-amber-500'}`}>
-                        {optimizeError ? '⛔ AI Optimization Error' : '⛔ Optimization Cancelled'}
+                  <div className={`p-8 rounded-3xl border shadow-2xl flex items-start gap-5 animate-in slide-in-from-top-4 duration-500 ${optimizeError ? 'bg-red-500/10 border-red-500/30' : 'bg-amber-500/10 border-amber-500/30'}`}>
+                    <div className={`p-4 rounded-2xl ${optimizeError ? 'bg-red-500/20 text-red-500' : 'bg-amber-500/20 text-amber-500'}`}>
+                      {optimizeError ? <ShieldAlert size={28} /> : <XCircle size={28} />}
+                    </div>
+                    <div className="flex-1">
+                      <p className={`font-black uppercase text-sm tracking-widest mb-2 ${optimizeError ? 'text-red-500' : 'text-amber-500'}`}>
+                        {optimizeError ? '❌ AI Optimization Error' : '⛔ Optimization Cancelled'}
                       </p>
-                      <p className="text-sm text-slate-300">
-                        {optimizeError ? `Reason: ${optimizeError}` : `Completed ${aiProgress} / ${aiRequiredList.length} segments.`}
+                      <p className="text-sm text-slate-300 leading-relaxed font-medium">
+                        {optimizeError ? `Error: ${optimizeError}` : `Completed ${aiProgress} / ${aiRequiredList.length} segments successfully.`}
                       </p>
+                      <p className="text-[10px] text-slate-500 uppercase mt-4 font-bold tracking-widest">You can still download the partially optimized file below.</p>
                     </div>
                   </div>
                 )}
@@ -440,77 +460,97 @@ const App: React.FC = () => {
                 <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden shadow-2xl">
                    <div className="p-8 border-b border-slate-800 flex justify-between items-center bg-slate-900/90 backdrop-blur-xl sticky top-0 z-10">
                      <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-3">
-                       <ListChecks size={20}/> AI Review List (&gt;40 CPS)
+                       <ListChecks size={22} className="text-indigo-400"/> Critical Review List (&gt;40 CPS)
                      </h3>
                      <div className="flex gap-4">
-                       <button onClick={() => downloadSRT(true)} className="px-6 py-2.5 bg-emerald-600/10 text-emerald-400 hover:bg-emerald-600/20 border border-emerald-600/20 rounded-xl text-xs font-bold uppercase transition-all flex items-center gap-2">
-                         <Download size={16}/> Download Current File
+                       <button onClick={() => downloadSRT(true)} className="px-8 py-3 bg-emerald-600/10 text-emerald-400 hover:bg-emerald-600/20 border border-emerald-600/20 rounded-2xl text-xs font-bold uppercase transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/5 active:scale-95">
+                         <Download size={18}/> Download Current File
                        </button>
-                       <button onClick={() => setOptimizeStep(1)} className="text-xs font-bold text-slate-500 hover:text-slate-300 uppercase transition-colors">Analyze Again</button>
+                       <button onClick={() => setOptimizeStep(1)} className="text-xs font-bold text-slate-500 hover:text-slate-300 uppercase transition-colors px-4 border-l border-slate-800 ml-2">Reset</button>
                      </div>
                    </div>
                    <div className="p-8 max-h-[700px] overflow-y-auto space-y-6 custom-scrollbar bg-slate-950/20">
                      {aiRequiredList.length === 0 ? (
-                       <div className="py-24 text-center space-y-5 opacity-40">
-                         <CheckCircle2 size={80} className="mx-auto text-emerald-500" strokeWidth={0.5} />
-                         <p className="text-sm font-bold uppercase tracking-[0.4em]">All segments below 40 CPS threshold</p>
+                       <div className="py-32 text-center space-y-6 opacity-40">
+                         <div className="w-24 h-24 bg-emerald-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-emerald-500/20">
+                           <CheckCircle2 size={56} className="text-emerald-500" strokeWidth={1} />
+                         </div>
+                         <p className="text-sm font-bold uppercase tracking-[0.5em] text-emerald-400">All segments under 40 CPS</p>
+                         <p className="text-xs text-slate-500 italic">No critical errors found in this file.</p>
                        </div>
-                     ) : aiRequiredList.map(s => (
-                       <div key={s.id} className={`group p-6 rounded-[2rem] border transition-all duration-500 ${
-                         s.status === 'applied' 
-                         ? 'bg-emerald-500/5 border-emerald-500/20 shadow-lg shadow-emerald-500/5' 
-                         : s.status === 'processing'
-                         ? 'bg-indigo-500/5 border-indigo-500/40 animate-pulse'
-                         : s.status === 'error'
-                         ? 'bg-red-500/5 border-red-500/40'
-                         : 'bg-slate-900/50 border-slate-800 hover:border-slate-700'
-                       }`}>
-                         <div className="flex justify-between items-center mb-5">
-                           <div className="flex items-center gap-4">
-                             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${s.cps > 50 ? 'bg-red-500/20 text-red-400' : 'bg-red-500/10 text-red-400'}`}>
-                               <Zap size={22} fill="currentColor" />
-                             </div>
-                             <div>
-                               <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Segment #{s.index}</p>
-                               <span className={`text-[12px] font-black ${s.cps > 50 ? 'text-red-500' : 'text-red-400'}`}>{s.cps.toFixed(1)} CPS</span>
-                             </div>
+                     ) : aiRequiredList.map(s => {
+                       const isRecentlyApplied = s.appliedAt && (Date.now() - s.appliedAt < 2000);
+                       return (
+                         <div key={s.id} className={`group p-6 rounded-[2rem] border transition-all duration-700 ${
+                           isRecentlyApplied
+                           ? 'bg-indigo-500/20 border-indigo-400 shadow-2xl shadow-indigo-500/20 scale-[1.01]'
+                           : s.status === 'applied' 
+                           ? 'bg-emerald-500/5 border-emerald-500/20 shadow-lg shadow-emerald-500/5' 
+                           : s.status === 'processing'
+                           ? 'bg-indigo-500/10 border-indigo-500/40 animate-pulse'
+                           : s.status === 'error'
+                           ? 'bg-red-500/10 border-red-500/40'
+                           : 'bg-slate-900/50 border-slate-800 hover:border-slate-700'
+                         }`}>
+                           <div className="flex justify-between items-center mb-5">
+                             <div className="flex items-center gap-4">
+                               <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${s.cps > 50 ? 'bg-red-500/20 text-red-500 shadow-lg shadow-red-500/10' : 'bg-red-500/10 text-red-400'}`}>
+                                 <Zap size={22} fill={s.cps > 50 ? "currentColor" : "none"} />
+                               </div>
+                               <div>
+                                 <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Segment #{s.index}</p>
+                                 <div className="flex items-center gap-2">
+                                   <span className={`text-sm font-black ${s.cps > 50 ? 'text-red-500' : 'text-red-400'}`}>{s.cps.toFixed(1)} CPS</span>
+                                   {s.cps > 60 && <span className="text-[8px] bg-red-500/20 text-red-500 px-1.5 py-0.5 rounded uppercase font-black tracking-tighter">Extreme</span>}
+                                 </div>
+                               </div>
                            </div>
-                           {s.status === 'applied' ? (
-                             <span className="flex items-center gap-2 px-4 py-1.5 bg-emerald-500/10 text-emerald-400 rounded-full text-[10px] font-bold uppercase border border-emerald-500/20">
-                               <CheckCircle2 size={14} /> AI Rewritten
-                             </span>
-                           ) : s.status === 'processing' ? (
-                             <span className="flex items-center gap-2 px-4 py-1.5 bg-indigo-500/10 text-indigo-400 rounded-full text-[10px] font-bold uppercase border border-indigo-500/20">
-                               <Loader2 size={14} className="animate-spin" /> Shortening...
-                             </span>
-                           ) : s.status === 'error' ? (
-                             <span className="flex items-center gap-2 px-4 py-1.5 bg-red-500/10 text-red-400 rounded-full text-[10px] font-bold uppercase border border-red-500/20">
-                               <AlertTriangle size={14} /> AI Error
-                             </span>
-                           ) : (
-                             <span className="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-4 py-1.5 bg-slate-800 rounded-full">Marked for AI</span>
-                           )}
+                           <div className="flex items-center gap-3">
+                             {s.status === 'applied' ? (
+                               <div className="flex items-center gap-2 px-4 py-2 bg-emerald-500/10 text-emerald-400 rounded-2xl text-[10px] font-bold uppercase border border-emerald-500/20 shadow-sm animate-in zoom-in-50">
+                                 <CheckCircle2 size={16} /> Optimized
+                               </div>
+                             ) : s.status === 'processing' ? (
+                               <div className="flex items-center gap-2 px-4 py-2 bg-indigo-500/20 text-indigo-400 rounded-2xl text-[10px] font-bold uppercase border border-indigo-500/30">
+                                 <Loader2 size={16} className="animate-spin" /> Live Rewriting...
+                               </div>
+                             ) : s.status === 'error' ? (
+                               <div className="flex items-center gap-2 px-4 py-2 bg-red-500/20 text-red-500 rounded-2xl text-[10px] font-bold uppercase border border-red-500/30">
+                                 <AlertTriangle size={16} /> Failed
+                               </div>
+                             ) : (
+                               <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-2 bg-slate-800 rounded-2xl border border-slate-700 shadow-inner">Waiting AI</div>
+                             )}
+                           </div>
                          </div>
                          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                            <div className="space-y-3">
-                             <p className="text-[10px] text-slate-600 uppercase font-bold tracking-widest pl-2">Current:</p>
-                             <div className="p-5 bg-slate-950/80 rounded-2xl border border-slate-800/80">
-                               <p className="text-[10px] font-mono text-slate-500 mb-3">{s.beforeTimestamp}</p>
-                               <p className="text-xs text-slate-400 leading-relaxed font-serif-vi">{s.beforeText}</p>
+                             <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest pl-3 flex items-center gap-2">
+                               <Clock size={12}/> Original Timing:
+                             </p>
+                             <div className="p-6 bg-slate-950/80 rounded-[1.5rem] border border-slate-800/80 group-hover:bg-slate-950/50 transition-colors">
+                               <p className="text-[10px] font-mono text-slate-600 mb-3">{s.beforeTimestamp}</p>
+                               <p className="text-xs text-slate-400 leading-relaxed font-serif-vi italic">{s.beforeText}</p>
                              </div>
                            </div>
                            <div className="space-y-3">
-                             <p className="text-[10px] text-red-500 uppercase font-bold tracking-widest pl-2">AI Result:</p>
-                             <div className={`p-5 rounded-2xl border transition-all duration-700 ${s.status === 'applied' ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-slate-950/40 border-slate-800'}`}>
-                               <p className={`text-[10px] font-mono mb-3 ${s.afterText !== s.beforeText ? 'text-emerald-400 font-bold' : 'text-slate-600'}`}>{s.afterTimestamp}</p>
-                               <p className={`text-xs leading-relaxed font-serif-vi ${s.afterText !== s.beforeText ? 'text-emerald-400 font-bold text-sm' : 'text-slate-500'}`}>
-                                 {s.afterText !== s.beforeText ? s.afterText : <span className="opacity-30 italic">... waiting ...</span>}
-                               </p>
+                             <p className="text-[10px] text-emerald-500 uppercase font-bold tracking-widest pl-3 flex items-center gap-2">
+                               <Sparkles size={12}/> AI Optimization:
+                             </p>
+                             <div className={`p-6 rounded-[1.5rem] border transition-all duration-1000 ${s.status === 'applied' ? 'bg-emerald-500/10 border-emerald-500/40 shadow-inner shadow-emerald-500/5' : 'bg-slate-950/30 border-slate-800'}`}>
+                               <p className={`text-[10px] font-mono mb-3 ${s.afterTimestamp !== s.beforeTimestamp ? 'text-emerald-400 font-bold' : 'text-slate-600'}`}>{s.afterTimestamp}</p>
+                               <div className={`text-sm leading-relaxed font-serif-vi ${s.status === 'applied' ? 'text-slate-100' : 'text-slate-500 opacity-30'}`}>
+                                 {s.status === 'applied' ? s.afterText : <span className="animate-pulse">Awaiting AI analysis...</span>}
+                               </div>
                              </div>
                            </div>
                          </div>
+                         {s.status === 'error' && s.error && (
+                           <p className="mt-4 px-4 py-2 bg-red-500/10 text-red-500 text-[10px] font-mono rounded-lg border border-red-500/20">{s.error}</p>
+                         )}
                        </div>
-                     ))}
+                       );
+                     })}
                    </div>
                 </div>
               </div>
@@ -519,12 +559,16 @@ const App: React.FC = () => {
         )}
       </main>
 
-      <footer className="p-5 text-center border-t border-slate-900 bg-slate-950/90 z-20">
+      <footer className="p-6 text-center border-t border-slate-900 bg-slate-950/90 z-20 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-           <p className="text-slate-700 text-[10px] uppercase tracking-[0.4em] font-bold">Donghua AI Subtitle Engine • v5.2 Smart Hybrid</p>
-           <div className="flex gap-6 text-[9px] font-bold text-slate-600 uppercase tracking-widest">
-              <span className="flex items-center gap-1.5"><ShieldCheck size={12}/> AI-Powered Context</span>
-              <span className="flex items-center gap-1.5"><Zap size={12}/> Math Optimization</span>
+           <p className="text-slate-700 text-[10px] uppercase tracking-[0.4em] font-black">Donghua AI Engine • v5.3 Realtime Hybrid</p>
+           <div className="flex gap-8 text-[9px] font-bold text-slate-600 uppercase tracking-widest">
+              <span className="flex items-center gap-2 group hover:text-indigo-400 transition-colors cursor-default">
+                <ShieldCheck size={14} className="text-indigo-500"/> AI Contextual Review
+              </span>
+              <span className="flex items-center gap-2 group hover:text-emerald-400 transition-colors cursor-default">
+                <Zap size={14} className="text-emerald-500"/> Math Safety Logic
+              </span>
            </div>
         </div>
       </footer>
@@ -532,6 +576,10 @@ const App: React.FC = () => {
   );
 };
 
-const ShieldCheck = ({size}: {size: number}) => <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>;
+const ShieldCheck = ({size, className}: {size: number, className?: string}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/>
+  </svg>
+);
 
 export default App;

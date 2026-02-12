@@ -128,9 +128,10 @@ export const optimizeHighCpsBatch = async (
     };
   });
 
-  const prompt = `Bạn là chuyên gia tối ưu phụ đề. Các đoạn sau có tốc độ đọc quá cao (>30 ký tự/s).
+  const prompt = `Bạn là chuyên gia tối ưu phụ đề. Các đoạn sau có tốc độ đọc quá cao (>40 ký tự/s).
 NHIỆM VỤ: Rút gọn nội dung (rewrite) sao cho ngắn hơn, dễ đọc hơn mà vẫn giữ nguyên ý nghĩa và mạch truyện.
-Cấm: Không đổi ID. Không đổi ý nghĩa cốt truyện.
+Cấm: Không đổi ID. Không đổi ý nghĩa cốt truyện. 
+Có thể chỉnh nhẹ timing nếu thấy thực sự cần thiết nhưng không được gây đè (overlap).
 
 Dữ liệu: ${JSON.stringify(payload)}
 

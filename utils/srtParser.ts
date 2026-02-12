@@ -32,7 +32,7 @@ export const msToTimestamp = (ms: number): string => {
 export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResult => {
   const aiRequiredSegments: HybridOptimizeSuggestion[] = [];
   let localFixCount = 0;
-  const SAFE_GAP = 50; // 0.05s
+  const SAFE_GAP = 50; // 0.05s as per prompt
 
   blocks.forEach((b, idx) => {
     const parts = b.timestamp.split(' --> ');
@@ -45,7 +45,7 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
     const charCount = text.length;
     const cps = durationS > 0 ? charCount / durationS : 999;
 
-    // RULE 1: CPS < 20 -> Ignore
+    // RULE 1: CPS < 20 -> Ignore completely
     if (cps < 20) return;
 
     // RULE 2: 20 <= CPS <= 40 -> Internal math fix calculation
@@ -63,7 +63,7 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
       }
 
       // If we can extend it effectively
-      if (idealEndMs > endMs + 5) { // Threshold for reporting a "fix"
+      if (idealEndMs > endMs + 5) { 
         localFixCount++;
       }
       return;
@@ -90,7 +90,7 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
 };
 
 /**
- * Step 2 helper: Apply safe math fixes to 20-40 range
+ * Apply safe math fixes to 20-40 range segments
  */
 export const applyLocalFixesOnly = (blocks: SubtitleBlock[]): SubtitleBlock[] => {
   const newBlocks = blocks.map(b => ({ ...b }));
@@ -118,6 +118,7 @@ export const applyLocalFixesOnly = (blocks: SubtitleBlock[]): SubtitleBlock[] =>
         idealEndMs = Math.min(idealEndMs, maxAllowedEnd);
       }
 
+      // Final end time must be at least current or better
       if (idealEndMs > endMs) {
         b.timestamp = `${parts[0]} --> ${msToTimestamp(idealEndMs)}`;
       }
@@ -162,7 +163,7 @@ export const extractChineseTitle = (fileName: string): string => {
 
 export const generateFileName = (currentName: string, isFinished: boolean, speed?: number, isOptimized?: boolean): string => {
   let baseName = currentName.replace(/\.[^/.]+$/, "");
-  if (isOptimized) return `[Optimized] ${baseName}.srt`;
-  if (isFinished) return `[Translated] ${baseName}.srt`;
+  if (isOptimized) return `[Optimized]_${baseName}.srt`;
+  if (isFinished) return `[Translated]_${baseName}.srt`;
   return baseName + ".srt";
 };
