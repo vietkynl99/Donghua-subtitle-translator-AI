@@ -185,7 +185,7 @@ const App: React.FC = () => {
             setOptimizeError(err.message);
             setAiRequiredList(prev => prev.map(s => batch.some(b => b.index === s.index) ? { ...s, status: 'error', errorMsg: err.message } : s));
             setOptimizeStats(prev => ({ ...prev, failed: prev.failed + batch.length }));
-            // Stop loop on serious error to avoid wasting credits
+            // Stop loop on serious error
             break; 
           }
           await new Promise(r => setTimeout(r, 100));
@@ -301,14 +301,16 @@ const App: React.FC = () => {
                   <div onClick={() => fileInputRef.current?.click()} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} className="border-2 border-dashed border-slate-700 rounded-[2.5rem] p-20 flex flex-col items-center justify-center cursor-pointer hover:border-indigo-500 transition-all duration-500 group">
                     <div className="w-24 h-24 bg-indigo-600/10 rounded-[2rem] flex items-center justify-center mb-8 border border-indigo-500/20 group-hover:scale-110 transition-transform"><Zap className="text-indigo-400" size={48} /></div>
                     <h2 className="text-3xl font-bold mb-4 tracking-tight">Hybrid Optimizer</h2>
-                    <p className="text-slate-400 text-sm mb-10 leading-relaxed max-w-md mx-auto">Tự động fix toán học (20-40 CPS) và dùng AI chuyên sâu cho các ca nặng (>40 CPS).</p>
+                    <p className="text-slate-400 text-sm mb-10 leading-relaxed max-w-md mx-auto">Tự động fix toán học (20-40 CPS) và dùng AI chuyên sâu cho các ca nặng (&gt;40 CPS).</p>
                     <div className="flex items-center gap-3 bg-indigo-600 px-10 py-5 rounded-2xl font-bold text-white shadow-2xl hover:bg-indigo-700 transition-all active:scale-95"><MousePointer2 size={24} /> Chọn file SRT</div>
                     <input type="file" ref={fileInputRef} onChange={(e) => e.target.files?.[0] && processFile(e.target.files[0])} accept=".srt" className="hidden" />
                   </div>
                </section>
             ) : optimizeStep === 1 ? (
               <section className="bg-slate-900 border border-slate-800 rounded-[3rem] p-16 text-center max-w-3xl mx-auto shadow-2xl my-12 animate-in zoom-in-95">
-                <div className="w-24 h-24 bg-indigo-600/10 rounded-[2rem] flex items-center justify-center mx-auto mb-8 border border-indigo-500/20"><Gauge className="text-indigo-400" size={48} /></div>
+                <div className="w-24 h-24 bg-indigo-600/10 rounded-[2rem] flex items-center justify-center mx-auto mb-8 border border-indigo-500/20 shadow-inner">
+                  <Gauge className="text-indigo-400" size={48} />
+                </div>
                 <h2 className="text-3xl font-bold mb-5 tracking-tight">Quick Analyze {fileName}</h2>
                 <div className="flex gap-4 justify-center">
                   <button onClick={runQuickAnalyze} disabled={isQuickAnalyzing} className="px-12 py-5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl flex items-center justify-center gap-3 shadow-2xl transition-all">
@@ -326,7 +328,7 @@ const App: React.FC = () => {
                     <p className="text-2xl font-black text-indigo-400">{optimizeStats.autoFixed}</p>
                   </div>
                   <div className="bg-slate-900/50 p-6 rounded-3xl border border-slate-800 text-center shadow-lg group hover:border-red-500/30 transition-all">
-                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1 tracking-widest">AI Required (>40)</p>
+                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1 tracking-widest">AI Required (&gt;40)</p>
                     <p className="text-2xl font-black text-red-500">{optimizeStats.total}</p>
                   </div>
                   <div className="bg-slate-900/50 p-6 rounded-3xl border border-slate-800 text-center shadow-lg group hover:border-emerald-500/30 transition-all">
@@ -375,7 +377,7 @@ const App: React.FC = () => {
                   <div className="bg-slate-900/80 p-8 rounded-3xl border border-red-500/20 shadow-2xl relative overflow-hidden">
                     <div className="flex justify-between items-center mb-6 px-2">
                        <p className="text-xs font-bold text-red-400 uppercase tracking-[0.2em] flex items-center gap-3"><Activity size={18} className="animate-pulse" /> Processing {optimizeStats.processed + optimizeStats.failed} / {optimizeStats.total} critical segments...</p>
-                       <span className="text-xs font-mono font-bold text-red-400">{Math.round(((optimizeStats.processed + optimizeStats.failed) / optimizeStats.total) * 100)}%</span>
+                       <span className="text-xs font-mono font-bold text-red-400">{Math.round(((optimizeStats.processed + optimizeStats.failed) / (optimizeStats.total || 1)) * 100)}%</span>
                     </div>
                     <div className="h-4 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
                       <div className="h-full bg-gradient-to-r from-red-600 via-orange-500 to-amber-400 transition-all duration-700 ease-out" style={{ width: `${((optimizeStats.processed + optimizeStats.failed) / (optimizeStats.total || 1)) * 100}%` }} />
