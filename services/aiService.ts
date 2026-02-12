@@ -214,7 +214,7 @@ export const translateSubtitles = async (
 };
 
 /**
- * Phân tích một batch SRT duy nhất để hỗ trợ logic hủy từ phía caller (App.tsx)
+ * Phân tích một batch SRT ở chế độ TIMING-ONLY
  */
 export const analyzeSrtBatch = async (
   chunk: any[],
@@ -225,24 +225,23 @@ export const analyzeSrtBatch = async (
   if (!apiKey) throw new Error("Thiếu API KEY.");
 
   const internalModel = MAP_MODEL_ID(model);
-  const prompt = `Bạn là AI tối ưu hóa SRT ở chế độ STRICT MODE (Bảo thủ tối đa).
-Nhiệm vụ: Chỉ đề xuất chỉnh sửa nếu có lỗi thực sự. KHÔNG sửa nếu không chắc chắn.
+  const prompt = `Bạn là chuyên gia kiểm tra kỹ thuật SRT (TIMING-ONLY MODE).
+NHIỆM VỤ: Chỉ phát hiện và đề xuất sửa lỗi kỹ thuật timing. Cấm sửa nội dung văn bản.
 
-CÁC LỖI ĐƯỢC PHÉP ĐỀ XUẤT:
-1. TRÙNG LẶP THỰC SỰ: Nội dung giống >95% ở 2 đoạn liên tiếp.
-2. TIMING LỖI NGHIÊM TRỌNG: Duration < 300ms hoặc overlap rõ ràng.
-3. CÂU BỊ CẮT ĐỨT: Đoạn trước chưa hết câu, đoạn sau bắt đầu bằng chữ thường, ghép lại mới mạch lạc.
+CÁC LỖI CẦN KIỂM TRA:
+1. TRÙNG LẶP THỜI GIAN (OVERLAP): Segment A kết thúc muộn hơn Segment B bắt đầu. Đề xuất chỉnh start_time/end_time để hết overlap.
+2. READING SPEED QUÁ CAO: Tốc độ đọc > 17 ký tự/giây. Đề xuất tăng duration (lùi end_time) để đạt ngưỡng 15 ký tự/giây.
 
-QUY TẮC ĐỘ DÀI (BẮT BUỘC):
-- Sau khi gộp: Tối đa 2 dòng.
-- Mỗi dòng: Tối đa 42 ký tự. Nếu vượt quá, KHÔNG ĐƯỢC gộp.
-
-CHỈ TRẢ VỀ ĐỀ XUẤT NẾU ĐỘ TIN CẬY (CONFIDENCE) >= 85%.
+QUY TẮC CỨNG:
+- KHÔNG gộp câu.
+- KHÔNG viết lại nội dung.
+- KHÔNG xoá đoạn trùng lặp nội dung.
+- CHỈ trả về đề xuất nếu Confidence >= 85%.
 
 Dữ liệu batch: ${JSON.stringify(chunk)}
 
-Trả về JSON ARRAY các đề xuất tối ưu. Nếu không có lỗi rõ ràng, trả về mảng trống [].
-Schema: [{"id": "...", "type": "merge|delete|adjust|edit", "indices": ["..."], "before": "...", "after": "...", "reason": "...", "explanation": "...", "proposedTimestamp": "..."}]`;
+Trả về JSON ARRAY. Nếu không có lỗi, trả về mảng trống [].
+Schema: [{"id": "gen_id", "type": "adjust", "indices": ["id1"], "before": "timestamp_goc", "after": "timestamp_de_xuat", "reason": "Overlap hoặc Speed", "explanation": "Chi tiết lỗi", "proposedTimestamp": "full_new_timestamp"}]`;
 
   try {
     let resultText = "";
@@ -261,7 +260,7 @@ Schema: [{"id": "...", "type": "merge|delete|adjust|edit", "indices": ["..."], "
               type: Type.OBJECT,
               properties: {
                 id: { type: Type.STRING },
-                type: { type: Type.STRING, enum: ["merge", "delete", "adjust", "edit"] },
+                type: { type: Type.STRING, enum: ["adjust", "delete", "merge", "edit"] },
                 indices: { type: Type.ARRAY, items: { type: Type.STRING } },
                 before: { type: Type.STRING },
                 after: { type: Type.STRING },

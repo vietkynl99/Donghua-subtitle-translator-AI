@@ -65,7 +65,6 @@ const App: React.FC = () => {
   const [isDraggingSingle, setIsDraggingSingle] = useState(false);
 
   const progressPercentage = status.total > 0 ? Math.round((status.progress / status.total) * 100) : 0;
-  const validProposedCount = proposedChanges.filter(c => c.isValid).length;
 
   useEffect(() => {
     const timer = setTimeout(async () => {
@@ -212,7 +211,7 @@ const App: React.FC = () => {
           break;
         }
 
-        const chunk = singleFileBlocks.slice(i, i + CHUNK_SIZE).map(b => ({ id: b.index, ts: b.timestamp, text: b.originalText }));
+        const chunk = singleFileBlocks.slice(i, i + CHUNK_SIZE).map(b => ({ id: b.index, ts: b.timestamp, text: b.originalText, charCount: b.originalText.length }));
         const { suggestions, tokens } = await analyzeSrtBatch(chunk, status.selectedModel);
         
         setAutoSuggestions(prev => {
@@ -227,7 +226,7 @@ const App: React.FC = () => {
 
         setOptimizeProgress(prev => ({ ...prev, current: Math.min(i + CHUNK_SIZE, singleFileBlocks.length) }));
         setStats(prev => ({ ...prev, totalTokens: prev.totalTokens + tokens }));
-        await new Promise(r => setTimeout(r, 400)); // Rate limit protection
+        await new Promise(r => setTimeout(r, 400)); 
       }
     } catch (err: any) {
       setOptimizerError(err.message || "Lỗi khi phân tích tối ưu hóa.");
@@ -310,7 +309,7 @@ const App: React.FC = () => {
       const content = stringifySRT(finalBlocks);
       const blob = new Blob([content], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
-      const newName = `[AutoOptimized] ${singleFileName || 'optimized'}.srt`;
+      const newName = `[TimingFixed]_` + (singleFileName || 'optimized.srt');
       const a = document.createElement('a');
       a.href = url;
       a.download = newName;
@@ -318,7 +317,7 @@ const App: React.FC = () => {
       setAutoSuggestions([]);
       setSingleFileBlocks([]);
       setSingleFileName('');
-      alert(`Đã tối ưu hóa xong!`);
+      alert(`Đã sửa timing thành công!`);
     }
   };
 
@@ -333,7 +332,7 @@ const App: React.FC = () => {
     const content = stringifySRT(deltaBlocks);
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
-    const newName = `[Changes-Only] ${hardFileName || 'optimized'}.srt`;
+    const newName = `[Changes-Only]_` + (hardFileName || 'optimized.srt');
     const a = document.createElement('a');
     a.href = url;
     a.download = newName;
@@ -482,7 +481,7 @@ const App: React.FC = () => {
             <div className="flex justify-center mb-8">
               <div className="bg-slate-900/80 p-1.5 rounded-2xl border border-slate-800 flex gap-2">
                 <button onClick={() => setOptimizerMode('merge')} className={`px-6 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${optimizerMode === 'merge' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}><Layers size={16}/> Soft + Hard Merge</button>
-                <button onClick={() => setOptimizerMode('auto')} className={`px-6 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${optimizerMode === 'auto' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}><BrainCircuit size={16}/> Auto Optimize Single SRT</button>
+                <button onClick={() => setOptimizerMode('auto')} className={`px-6 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${optimizerMode === 'auto' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}><BrainCircuit size={16}/> TIMING-ONLY Check</button>
               </div>
             </div>
 
@@ -491,8 +490,15 @@ const App: React.FC = () => {
                 <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
                   <h3 className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-4 flex items-center gap-2"><FileText size={14}/> 1. Hard SRT (Master/OCR)</h3>
                   {!hardFileName ? (
-                    <div onClick={() => { const i = document.createElement('input'); i.type='file'; i.accept='.srt'; i.onchange=(e:any)=>handleUploadOptimizer(e.target.files[0], 'hard'); i.click(); }} className="border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer border-slate-700 hover:border-indigo-500">
-                      <Upload className="mx-auto text-slate-500 mb-2" size={32} /><p className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Bấm hoặc kéo thả file Hard SRT</p>
+                    <div 
+                      onDragOver={(e) => { e.preventDefault(); setIsDraggingHard(true); }}
+                      onDragLeave={() => setIsDraggingHard(false)}
+                      onDrop={(e) => { e.preventDefault(); setIsDraggingHard(false); const f = e.dataTransfer.files[0]; if(f) handleUploadOptimizer(f, 'hard'); }}
+                      onClick={() => { const i = document.createElement('input'); i.type='file'; i.accept='.srt'; i.onchange=(e:any)=>handleUploadOptimizer(e.target.files[0], 'hard'); i.click(); }} 
+                      className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${isDraggingHard ? 'border-indigo-500 bg-indigo-500/10' : 'border-slate-700 hover:border-indigo-500'}`}
+                    >
+                      <Upload className="mx-auto text-slate-500 mb-2" size={32} />
+                      <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Bấm hoặc kéo thả file Hard SRT</p>
                     </div>
                   ) : (
                     <div className="flex items-center justify-between p-3 bg-indigo-500/5 border border-indigo-500/20 rounded-xl"><span className="text-xs font-bold text-white truncate max-w-[80%]">{hardFileName}</span><button onClick={() => {setHardFileName(''); setHardBlocks([]);}} className="text-red-400 p-1 hover:bg-red-400/10 rounded-lg"><Trash2 size={14}/></button></div>
@@ -501,8 +507,15 @@ const App: React.FC = () => {
                 <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
                   <h3 className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest mb-4 flex items-center gap-2"><Activity size={14}/> 2. Soft SRT (Audio)</h3>
                   {!softFileName ? (
-                    <div onClick={() => { const i = document.createElement('input'); i.type='file'; i.accept='.srt'; i.onchange=(e:any)=>handleUploadOptimizer(e.target.files[0], 'soft'); i.click(); }} className="border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer border-slate-700 hover:border-cyan-500">
-                      <Upload className="mx-auto text-slate-500 mb-2" size={32} /><p className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Bấm hoặc kéo thả file Soft SRT</p>
+                    <div 
+                      onDragOver={(e) => { e.preventDefault(); setIsDraggingSoft(true); }}
+                      onDragLeave={() => setIsDraggingSoft(false)}
+                      onDrop={(e) => { e.preventDefault(); setIsDraggingSoft(false); const f = e.dataTransfer.files[0]; if(f) handleUploadOptimizer(f, 'soft'); }}
+                      onClick={() => { const i = document.createElement('input'); i.type='file'; i.accept='.srt'; i.onchange=(e:any)=>handleUploadOptimizer(e.target.files[0], 'soft'); i.click(); }} 
+                      className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${isDraggingSoft ? 'border-cyan-500 bg-cyan-500/10' : 'border-slate-700 hover:border-cyan-500'}`}
+                    >
+                      <Upload className="mx-auto text-slate-500 mb-2" size={32} />
+                      <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">Bấm hoặc kéo thả file Soft SRT</p>
                     </div>
                   ) : (
                     <div className="flex items-center justify-between p-3 bg-cyan-500/5 border border-cyan-500/20 rounded-xl"><span className="text-xs font-bold text-white truncate max-w-[80%]">{softFileName}</span><button onClick={() => {setSoftFileName(''); setSoftBlocks([]);}} className="text-red-400 p-1 hover:bg-red-400/10 rounded-lg"><Trash2 size={14}/></button></div>
@@ -513,15 +526,23 @@ const App: React.FC = () => {
               <section className="bg-slate-900 border border-slate-800 rounded-3xl p-10 shadow-xl max-w-2xl mx-auto">
                 <div className="text-center mb-8">
                   <div className="w-16 h-16 bg-indigo-600/20 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-indigo-500/30"><Brain className="text-indigo-400" size={32}/></div>
-                  <h3 className="text-lg font-bold text-white mb-2">Auto Optimize Single SRT</h3>
+                  <h3 className="text-lg font-bold text-white mb-2">Timing-Only Optimizer</h3>
                   <div className="inline-flex items-center gap-2 px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full text-[10px] text-amber-500 font-bold uppercase tracking-widest mb-4">
-                    <Activity size={12}/> STRICT MODE: Bảo toàn nội dung tối đa
+                    <Activity size={12}/> TECHNICAL STRICT MODE: Chỉ sửa Overlap & Speed
                   </div>
-                  <p className="text-slate-400 text-xs">AI chỉ đề xuất nếu có lỗi thực sự (trùng lặp, timing ngắn, câu bị cắt).</p>
+                  <p className="text-slate-400 text-xs">Phát hiện chồng chéo thời gian và tốc độ đọc quá cao. Không can thiệp nội dung.</p>
                 </div>
                 {!singleFileName ? (
-                  <div onClick={() => { const i = document.createElement('input'); i.type='file'; i.accept='.srt'; i.onchange=(e:any)=>handleUploadOptimizer(e.target.files[0], 'single'); i.click(); }} className="border-2 border-dashed rounded-3xl p-12 text-center cursor-pointer border-slate-700 hover:border-indigo-500">
-                    <FileUp className="mx-auto text-slate-500 mb-4" size={48} /><p className="text-sm text-slate-300 font-bold uppercase tracking-widest">Chọn file SRT cần tối ưu</p>
+                  <div 
+                    onDragOver={(e) => { e.preventDefault(); setIsDraggingSingle(true); }}
+                    onDragLeave={() => setIsDraggingSingle(false)}
+                    onDrop={(e) => { e.preventDefault(); setIsDraggingSingle(false); const f = e.dataTransfer.files[0]; if(f) handleUploadOptimizer(f, 'single'); }}
+                    onClick={() => { const i = document.createElement('input'); i.type='file'; i.accept='.srt'; i.onchange=(e:any)=>handleUploadOptimizer(e.target.files[0], 'single'); i.click(); }} 
+                    className={`border-2 border-dashed rounded-3xl p-12 text-center cursor-pointer transition-all ${isDraggingSingle ? 'border-indigo-500 bg-indigo-500/10' : 'border-slate-700 hover:border-indigo-500 hover:bg-indigo-500/5'}`}
+                  >
+                    <FileUp className="mx-auto text-slate-500 mb-4" size={48} />
+                    <p className="text-sm text-slate-300 font-bold uppercase tracking-widest">Kéo thả file SRT vào đây</p>
+                    <p className="text-xs text-slate-500 mt-2">Chỉ chấp nhận file .srt</p>
                   </div>
                 ) : (
                   <div className="flex items-center justify-between p-4 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl">
@@ -535,11 +556,11 @@ const App: React.FC = () => {
             <div className="flex justify-center flex-col items-center gap-4">
               <div className="flex gap-4">
                 <button onClick={runAnalysis} disabled={isOptimizing || (optimizerMode === 'merge' ? (!hardFileName || !softFileName) : !singleFileName)} className="px-12 py-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-30 text-white font-bold rounded-2xl shadow-xl flex items-center gap-3 transition-all active:scale-95">
-                  {isOptimizing ? <Loader2 className="animate-spin" size={20}/> : <Zap size={20}/>} {isOptimizing ? "Đang phân tích..." : "Phân tích & Đề xuất tối ưu"}
+                  {isOptimizing ? <Loader2 className="animate-spin" size={20}/> : <Zap size={20}/>} {isOptimizing ? "Đang kiểm tra timing..." : "Bắt đầu kiểm tra Kỹ thuật"}
                 </button>
                 {isOptimizing && (
                    <button onClick={cancelAnalysis} className="px-6 py-4 bg-red-600/20 hover:bg-red-600/40 text-red-400 font-bold rounded-2xl border border-red-500/30 flex items-center gap-2 transition-all">
-                      <XCircle size={20}/> HỦY PHÂN TÍCH
+                      <XCircle size={20}/> HỦY KIỂM TRA
                    </button>
                 )}
               </div>
@@ -553,7 +574,7 @@ const App: React.FC = () => {
                   <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
                     <div className={`h-full transition-all duration-500 ${isAnalysisCancelled ? 'bg-red-500' : 'bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.5)]'}`} style={{ width: `${(optimizeProgress.current / (optimizeProgress.total || 1)) * 100}%` }} />
                   </div>
-                  <p className="text-[10px] text-slate-500 text-center italic">Đã phát hiện: {autoSuggestions.length} vấn đề cấu trúc (Strict Mode)</p>
+                  <p className="text-[10px] text-slate-500 text-center italic">Phát hiện {autoSuggestions.length} vấn đề Timing / Overlap</p>
                 </div>
               )}
             </div>
@@ -564,8 +585,8 @@ const App: React.FC = () => {
               <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden shadow-2xl animate-in slide-in-from-bottom-8">
                 <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/80 backdrop-blur-md sticky top-0 z-10">
                   <div className="flex flex-col gap-1">
-                    <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-2"><Target size={16}/> CÁC ĐỀ XUẤT TỐI ƯU ({autoSuggestions.length})</h3>
-                    {isOptimizing && <p className="text-[10px] text-amber-400 animate-pulse font-bold flex items-center gap-1"><RefreshCw size={10} className="animate-spin"/> AI VẪN ĐANG TIẾP TỤC PHÂN TÍCH...</p>}
+                    <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-2"><Target size={16}/> ĐỀ XUẤT SỬA LỖI TIMING ({autoSuggestions.length})</h3>
+                    {isOptimizing && <p className="text-[10px] text-amber-400 animate-pulse font-bold flex items-center gap-1"><RefreshCw size={10} className="animate-spin"/> AI ĐANG KIỂM TRA TIẾP...</p>}
                   </div>
                   <button onClick={toggleSelectAll} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-[10px] font-bold uppercase rounded-xl transition-all border border-slate-700">
                     {selectedChangeIds.size === autoSuggestions.length ? "Hủy chọn tất cả" : "Chọn tất cả"}
@@ -578,18 +599,15 @@ const App: React.FC = () => {
                       <div className="flex-1 space-y-4">
                         <div className="flex justify-between items-center border-b border-slate-800 pb-2">
                           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-indigo-400">
-                             {s.type === 'merge' && <><Scissors size={14} className="rotate-90"/> Gộp đoạn {s.indices.join(' + ')}</>}
-                             {s.type === 'delete' && <><Trash2 size={14}/> Xóa đoạn {s.indices[0]}</>}
-                             {s.type === 'adjust' && <><Clock size={14}/> Chỉnh thời gian {s.indices[0]}</>}
-                             {s.type === 'edit' && <><Settings size={14}/> Sửa nội dung {s.indices[0]}</>}
+                             <Clock size={14}/> {s.reason === 'Overlap' ? 'LỖI CHỒNG CHÉO THỜI GIAN' : 'TỐC ĐỘ ĐỌC QUÁ CAO'} (Đoạn {s.indices.join(', ')})
                           </div>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                           <div className="space-y-1"><span className="text-[10px] font-bold text-slate-500 uppercase">Hiện tại:</span><div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800 text-xs text-slate-400 italic">{s.before}</div></div>
-                           <div className="space-y-1"><span className="text-[10px] font-bold text-emerald-500 uppercase">Đề xuất:</span><div className="p-3 bg-emerald-500/5 rounded-xl border border-emerald-500/30 text-xs text-white font-bold">{s.type === 'delete' ? <span className="text-red-400 line-through">(Xóa nội dung này)</span> : s.after}</div></div>
+                           <div className="space-y-1"><span className="text-[10px] font-bold text-slate-500 uppercase">Gốc:</span><div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800 text-xs text-slate-400 font-mono">{s.before}</div></div>
+                           <div className="space-y-1"><span className="text-[10px] font-bold text-emerald-500 uppercase">Đề xuất:</span><div className="p-3 bg-emerald-500/5 rounded-xl border border-emerald-500/30 text-xs text-white font-bold font-mono">{s.after}</div></div>
                         </div>
                         <div className="bg-slate-800/50 p-3 rounded-2xl border border-slate-700/50">
-                          <p className="text-[10px] text-indigo-300 font-bold flex items-center gap-2 uppercase tracking-widest"><Info size={14}/> Lý do tối ưu:</p>
+                          <p className="text-[10px] text-indigo-300 font-bold flex items-center gap-2 uppercase tracking-widest"><Info size={14}/> Giải pháp Kỹ thuật:</p>
                           <p className="text-[11px] text-slate-300 leading-relaxed italic mt-1">{s.explanation}</p>
                         </div>
                       </div>
@@ -598,12 +616,12 @@ const App: React.FC = () => {
                   {isOptimizing && (
                     <div className="p-12 border-2 border-dashed border-slate-800 rounded-3xl flex flex-col items-center justify-center opacity-40">
                       <Loader2 size={32} className="animate-spin mb-2 text-indigo-500"/>
-                      <p className="text-[10px] font-bold uppercase tracking-[0.3em]">AI đang phân tích các đoạn tiếp theo...</p>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.3em]">AI đang quét kỹ thuật các đoạn tiếp theo...</p>
                     </div>
                   )}
                 </div>
                 <div className="p-6 border-t border-slate-800 bg-slate-900/80 flex gap-4">
-                  <button onClick={applyOptimization} disabled={selectedChangeIds.size === 0} className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-30 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl shadow-emerald-500/20 active:scale-95"><CheckCircle2 size={20}/> ÁP DỤNG {selectedChangeIds.size} THAY ĐỔI & XUẤT FILE</button>
+                  <button onClick={applyOptimization} disabled={selectedChangeIds.size === 0} className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-30 text-white font-bold py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl shadow-emerald-500/20 active:scale-95"><CheckCircle2 size={20}/> ÁP DỤNG {selectedChangeIds.size} SỬA ĐỔI & XUẤT FILE [TimingFixed]</button>
                   <button onClick={() => { setAutoSuggestions([]); setSelectedChangeIds(new Set()); }} className="px-8 py-4 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-2xl transition-all">HỦY</button>
                 </div>
               </div>
@@ -612,7 +630,7 @@ const App: React.FC = () => {
         )}
       </main>
       <footer className="p-4 text-center border-t border-slate-900 bg-slate-950/80 mt-auto">
-        <p className="text-slate-700 text-[9px] uppercase tracking-[0.5em] font-bold">Donghua AI Subtitle System • v3.9 Auto Optimized & Streaming</p>
+        <p className="text-slate-700 text-[9px] uppercase tracking-[0.5em] font-bold">Donghua AI Subtitle System • v3.9 Timing-Only Mode</p>
       </footer>
     </div>
   );
