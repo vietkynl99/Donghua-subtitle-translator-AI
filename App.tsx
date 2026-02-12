@@ -5,7 +5,7 @@ import {
   FileText, Sparkles, Activity, Box, Zap, Brain, Gauge, ListChecks, 
   XCircle, BarChart3, MousePointer2, ShieldAlert, CheckCircle, 
   Layers3, Merge as MergeIcon, Languages, TrendingUp, Info, Tag,
-  ArrowRightLeft, BarChart, History, Key
+  ArrowRightLeft, BarChart, History
 } from 'lucide-react';
 import { SubtitleBlock, TranslationState, TitleAnalysis, HybridOptimizeSuggestion, OptimizeStats } from './types';
 import { parseSRT, stringifySRT, extractChineseTitle, generateFileName, performQuickAnalyze, applyLocalFixesOnly } from './utils/srtParser';
@@ -27,7 +27,6 @@ const App: React.FC = () => {
   // 2. Persistent Global Data State
   const [blocks, setBlocks] = useState<SubtitleBlock[]>([]);
   const [fileName, setFileName] = useState<string>('');
-  const [userApiKey, setUserApiKey] = useState<string>('');
   const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash');
   const [hardsubContent, setHardsubContent] = useState<string>('');
   const [analysis, setAnalysis] = useState<TitleAnalysis | null>(null);
@@ -43,13 +42,8 @@ const App: React.FC = () => {
 
   // Sync state for API health
   useEffect(() => {
-    const keyToUse = userApiKey || process.env.API_KEY || '';
-    if (!keyToUse) {
-      setStatus(prev => ({ ...prev, apiStatus: 'invalid' }));
-      return;
-    }
     checkApiHealth(selectedModel).then(v => setStatus(prev => ({ ...prev, apiStatus: v ? 'valid' : 'invalid' })));
-  }, [selectedModel, userApiKey]);
+  }, [selectedModel]);
 
   const handleFileLoad = (file: File) => {
     setFileName(file.name);
@@ -169,16 +163,6 @@ const App: React.FC = () => {
 
           {/* Selector Right */}
           <div className="flex items-center gap-3">
-            <div className="hidden lg:flex items-center gap-2 bg-slate-950/50 px-3 py-1.5 rounded-xl border border-slate-800">
-              <Key size={12} className="text-slate-600" />
-              <input 
-                type="password" 
-                placeholder="API KEY (OPTIONAL)" 
-                value={userApiKey}
-                onChange={e => setUserApiKey(e.target.value)}
-                className="bg-transparent text-[10px] font-bold text-slate-400 uppercase outline-none w-32 placeholder:text-slate-800"
-              />
-            </div>
             <div className="flex items-center gap-3 bg-slate-900 px-4 py-2 rounded-2xl border border-slate-800 shadow-inner">
               <div className={`w-2 h-2 rounded-full ${status.apiStatus === 'valid' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-red-500'}`} />
               <select 
@@ -229,12 +213,7 @@ const App: React.FC = () => {
                   </div>
                 )}
               </div>
-              
-              {/* This divider will be used before tool-specific sidebar content */}
               <div className="h-px bg-slate-800 w-full" />
-              
-              {/* Sidebar Action Area will be rendered inside Tool components via props or context if needed, but for simplicity we'll pass it down or just keep it modular */}
-              {/* Actually, let's keep the render logic in each Tool component for both Sidebar and Content */}
             </section>
           </aside>
 
@@ -321,7 +300,6 @@ const TranslateTool: React.FC<any> = ({ blocks, setBlocks, status, setStatus, an
         </div>
       </div>
       
-      {/* Sidebar Overlay Action */}
       <div className="lg:w-72 shrink-0 space-y-4">
         {analysis && (
           <div className="p-5 bg-slate-900 border border-slate-800 rounded-3xl space-y-4">
@@ -532,7 +510,7 @@ const OptimizeTool: React.FC<any> = ({ blocks, setBlocks, status, setStatus, sel
               </div>
               <div className="max-w-xs space-y-3">
                 <h3 className="text-lg font-black uppercase tracking-widest">Ready for analysis</h3>
-                <p className="text-xs text-slate-500">System will scan segments for high CPS (> 40). Local fixes will be applied to segments between 20-40 CPS.</p>
+                <p className="text-xs text-slate-500">System will scan segments for high CPS ({">"} 40). Local fixes will be applied to segments between 20-40 CPS.</p>
               </div>
             </div>
           ) : (
