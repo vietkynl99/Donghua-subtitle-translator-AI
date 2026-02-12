@@ -41,7 +41,7 @@ export interface HybridOptimizeSuggestion {
   charCount: number;
   duration: number;
   beforeTimestamp: string;
-  afterTimestamp: string; // Proposed for local or will be adjusted by AI
+  afterTimestamp: string;
   beforeText: string;
   afterText: string;
   status: 'pending' | 'processing' | 'applied' | 'error';

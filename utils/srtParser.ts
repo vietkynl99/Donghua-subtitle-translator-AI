@@ -25,6 +25,9 @@ export const msToTimestamp = (ms: number): string => {
 
 /**
  * Bước 1: Quick Analyze - Local logic only
+ * 🟢 < 20: Bỏ qua
+ * 🟡 20 - 40: Tính Local Fix (không hiển thị)
+ * 🔴 > 40: Mark AI Required
  */
 export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResult => {
   const aiRequiredSegments: HybridOptimizeSuggestion[] = [];
@@ -42,16 +45,16 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
     const charCount = text.length;
     const cps = durationS > 0 ? charCount / durationS : 999;
 
-    // RULE 1: CPS < 20 -> Ignore
+    // RULE 1: CPS < 20 -> Ignore completely
     if (cps < 20) return;
 
-    // RULE 2: 20 <= CPS <= 30 -> Auto Fix Local
-    if (cps >= 20 && cps <= 30) {
+    // RULE 2: 20 <= CPS <= 40 -> Internal math fix calculation (Auto)
+    if (cps >= 20 && cps <= 40) {
       const targetCps = 20;
       const requiredDurationMs = (charCount / targetCps) * 1000;
       let idealEndMs = startMs + requiredDurationMs;
 
-      // Check for overlap with next segment
+      // Anti-overlap check
       const nextBlock = blocks[idx + 1];
       if (nextBlock) {
         const nextStartMs = timestampToMs(nextBlock.timestamp.split(' --> ')[0]);
@@ -59,14 +62,15 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
         idealEndMs = Math.min(idealEndMs, maxAllowedEnd);
       }
 
-      if (idealEndMs > endMs) {
+      // If we can actually extend it significantly
+      if (idealEndMs > endMs + 10) { // Only count if we add >10ms
         localFixCount++;
       }
       return;
     }
 
-    // RULE 3: CPS > 30 -> AI Required
-    if (cps > 30) {
+    // RULE 3: CPS > 40 -> AI REQUIRED list
+    if (cps > 40) {
       aiRequiredSegments.push({
         id: `ai-${b.index}`,
         index: b.index,
@@ -86,10 +90,10 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
 };
 
 /**
- * Apply Local Fixes to blocks
+ * Apply Local Fixes to blocks (20-40 range)
  */
 export const applyLocalFixesOnly = (blocks: SubtitleBlock[]): SubtitleBlock[] => {
-  const newBlocks = [...blocks];
+  const newBlocks = blocks.map(b => ({ ...b }));
   const SAFE_GAP = 50;
 
   newBlocks.forEach((b, idx) => {
@@ -102,7 +106,8 @@ export const applyLocalFixesOnly = (blocks: SubtitleBlock[]): SubtitleBlock[] =>
     const charCount = text.length;
     const cps = durationS > 0 ? charCount / durationS : 999;
 
-    if (cps >= 20 && cps <= 30) {
+    // Apply only for the 20-40 range as per prompt
+    if (cps >= 20 && cps <= 40) {
       const targetCps = 20;
       const requiredDurationMs = (charCount / targetCps) * 1000;
       let idealEndMs = startMs + requiredDurationMs;
@@ -114,6 +119,7 @@ export const applyLocalFixesOnly = (blocks: SubtitleBlock[]): SubtitleBlock[] =>
         idealEndMs = Math.min(idealEndMs, maxAllowedEnd);
       }
 
+      // Final end time must be between current and max allowed
       if (idealEndMs > endMs) {
         b.timestamp = `${parts[0]} --> ${msToTimestamp(idealEndMs)}`;
       }
