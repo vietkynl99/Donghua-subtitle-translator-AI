@@ -42,6 +42,8 @@ export interface InterruptionInfo {
   remaining: number;
 }
 
+export type AiProvider = 'gemini' | 'openai';
+
 export interface TranslationState {
   isTranslating: boolean;
   isAnalyzing: boolean;
@@ -52,4 +54,5 @@ export interface TranslationState {
   fileStatus: 'new' | 'mixed' | 'completed' | null;
   apiStatus: 'checking' | 'valid' | 'invalid' | 'unknown';
   selectedModel: string;
+  userApiKey?: string;
 }
