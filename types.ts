@@ -54,6 +54,28 @@ export interface AutoOptimizeSuggestion {
   proposedTimestamp?: string;
 }
 
+export interface HybridOptimizeSuggestion {
+  id: string;
+  index: string;
+  type: 'local' | 'ai';
+  cps: number;
+  charCount: number;
+  duration: number;
+  beforeTimestamp: string;
+  afterTimestamp: string;
+  beforeText: string;
+  afterText: string;
+  explanation: string;
+  status: 'pending' | 'applied' | 'error';
+}
+
+export interface HybridOptimizeStats {
+  total: number;
+  ignored: number; // < 20
+  localFix: number; // 20 - 30
+  aiRequired: number; // > 30
+}
+
 export interface SessionStats {
   requests: number;
   totalTokens: number;
