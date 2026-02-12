@@ -29,51 +29,27 @@ export interface SubtitleBlock {
   translatedText?: string;
 }
 
-export interface ProposedChange {
-  id: string;
-  start: string;
-  end: string;
-  text: string;
-  startMs: number;
-  hardContext?: string | null;
-  reason: string;
-  contextAnalysis: string;
-  isValid: boolean;
-  hardBefore?: string | null;
-  hardAfter?: string | null;
-}
-
-export interface AutoOptimizeSuggestion {
-  id: string;
-  type: 'merge' | 'delete' | 'adjust' | 'edit';
-  indices: string[];
-  before: string;
-  after: string;
-  reason: string;
-  explanation: string;
-  proposedTimestamp?: string;
+export interface HybridOptimizeResult {
+  aiRequiredSegments: HybridOptimizeSuggestion[];
+  localFixCount: number;
 }
 
 export interface HybridOptimizeSuggestion {
   id: string;
   index: string;
-  type: 'local' | 'ai';
   cps: number;
   charCount: number;
   duration: number;
   beforeTimestamp: string;
-  afterTimestamp: string;
+  afterTimestamp: string; // Proposed for local or will be adjusted by AI
   beforeText: string;
   afterText: string;
-  explanation: string;
-  status: 'pending' | 'applied' | 'error';
+  status: 'pending' | 'processing' | 'applied' | 'error';
 }
 
 export interface HybridOptimizeStats {
   total: number;
-  ignored: number; // < 20
-  localFix: number; // 20 - 30
-  aiRequired: number; // > 30
+  aiRequired: number;
 }
 
 export interface SessionStats {

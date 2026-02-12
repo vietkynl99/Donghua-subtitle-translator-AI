@@ -1,16 +1,16 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { SubtitleBlock, TitleAnalysis, AiProvider, AutoOptimizeSuggestion, HybridOptimizeSuggestion } from "../types";
+import { SubtitleBlock, TitleAnalysis, AiProvider, HybridOptimizeSuggestion } from "../types";
 
 const getProvider = (modelName: string): AiProvider => {
   return modelName.toLowerCase().includes('gpt') ? 'openai' : 'gemini';
 };
 
-// Fixed: Better model mapping following guidelines to prioritize Gemini 3 series
+// Prioritize Gemini 2.5 series as requested
 const MAP_MODEL_ID = (modelName: string): string => {
   const name = modelName.toLowerCase();
-  if (name.includes('pro')) return 'gemini-3-pro-preview';
-  return 'gemini-3-flash-preview';
+  if (name.includes('pro')) return 'gemini-2.5-pro-preview';
+  return 'gemini-2.5-flash-preview';
 };
 
 const withRetry = async <T>(fn: () => Promise<T>, retries = 2, delay = 2000): Promise<T> => {
@@ -25,30 +25,11 @@ const withRetry = async <T>(fn: () => Promise<T>, retries = 2, delay = 2000): Pr
   }
 };
 
-const callOpenAi = async (model: string, apiKey: string, prompt: string, isJson: boolean) => {
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: model,
-      messages: [{ role: "user", content: prompt }],
-      response_format: isJson ? { type: "json_object" } : undefined,
-      temperature: 0.1
-    })
-  });
-  const data = await response.json();
-  return { text: data.choices[0].message.content, tokens: data.usage.total_tokens };
-};
-
 export const checkApiHealth = async (model: string): Promise<boolean> => {
   const apiKey = process.env.API_KEY;
   if (!apiKey) return false;
   try {
     const ai = new GoogleGenAI({ apiKey });
-    // Fixed: Added withRetry for health check following SDK best practices
     await withRetry(() => ai.models.generateContent({ model: MAP_MODEL_ID(model), contents: "hi", config: { maxOutputTokens: 5 } }));
     return true;
   } catch { return false; }
@@ -57,7 +38,6 @@ export const checkApiHealth = async (model: string): Promise<boolean> => {
 export const analyzeTitle = async (title: string, model: string): Promise<{ analysis: TitleAnalysis, tokens: number }> => {
   const apiKey = process.env.API_KEY || "";
   const ai = new GoogleGenAI({ apiKey });
-  // Fixed: Wrapped call with withRetry for API robustness
   const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
     model: MAP_MODEL_ID(model),
     contents: `Phân tích tiêu đề Donghua "${title}" trả về JSON.`,
@@ -91,12 +71,10 @@ export const translateSubtitles = async (
   const translatedBlocks: SubtitleBlock[] = [...blocks];
   for (let i = 0; i < blocks.length; i += CHUNK_SIZE) {
     const chunk = blocks.slice(i, i + CHUNK_SIZE);
-    // Use translatedText if available to handle already mixed blocks
     const pending = chunk.filter(b => !b.translatedText || /[\u4e00-\u9fa5]/.test(b.translatedText || b.originalText));
     if (pending.length === 0) { onProgress(Math.min(i + CHUNK_SIZE, blocks.length), 0); continue; }
     
     const ai = new GoogleGenAI({ apiKey });
-    // Fixed: Wrapped call with withRetry and improved data selection using current translated context
     const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
       model: MAP_MODEL_ID(model),
       contents: `Dịch phụ đề: ${analysis.translatedTitle}. Dữ liệu: ${JSON.stringify(pending.map(b => ({ id: b.index, text: b.translatedText || b.originalText })))}`,
@@ -122,9 +100,6 @@ export const translateSubtitles = async (
   return translatedBlocks;
 };
 
-/**
- * AI xử lý rút gọn nội dung cho các câu >30 CPS
- */
 export const optimizeHighCpsBatch = async (
   targetSuggestions: HybridOptimizeSuggestion[],
   allBlocks: SubtitleBlock[],
@@ -133,7 +108,6 @@ export const optimizeHighCpsBatch = async (
   const apiKey = process.env.API_KEY || "";
   const ai = new GoogleGenAI({ apiKey });
   
-  // Tạo data payload kèm ngữ cảnh
   const payload = targetSuggestions.map(s => {
     const currentIdx = allBlocks.findIndex(b => b.index === s.index);
     const context = allBlocks.slice(Math.max(0, currentIdx - 2), Math.min(allBlocks.length, currentIdx + 3))
@@ -155,7 +129,6 @@ Dữ liệu: ${JSON.stringify(payload)}
 
 Trả về JSON ARRAY: [{"id": "...", "afterText": "nội dung đã rút gọn", "afterTimestamp": "giữ nguyên hoặc chỉnh nhẹ nếu cần"}]`;
 
-  // Fixed: Wrapped call with withRetry following Google GenAI best practices
   const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
     model: MAP_MODEL_ID(model),
     contents: prompt,

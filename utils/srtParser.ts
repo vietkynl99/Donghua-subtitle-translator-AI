@@ -1,5 +1,5 @@
 
-import { SubtitleBlock, ProposedChange, HybridOptimizeSuggestion, HybridOptimizeStats } from '../types';
+import { SubtitleBlock, HybridOptimizeSuggestion, HybridOptimizeResult } from '../types';
 
 /**
  * Chuyển đổi chuỗi timestamp SRT (00:00:00,000) sang Milliseconds
@@ -24,19 +24,16 @@ export const msToTimestamp = (ms: number): string => {
 };
 
 /**
- * Bước 1: Phân tích nhanh (Quick Analyze) hoàn toàn local
+ * Bước 1: Quick Analyze - Local logic only
  */
-export const performQuickAnalyze = (blocks: SubtitleBlock[]): { suggestions: HybridOptimizeSuggestion[], stats: HybridOptimizeStats } => {
-  const suggestions: HybridOptimizeSuggestion[] = [];
-  const stats: HybridOptimizeStats = { total: blocks.length, ignored: 0, localFix: 0, aiRequired: 0 };
+export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResult => {
+  const aiRequiredSegments: HybridOptimizeSuggestion[] = [];
+  let localFixCount = 0;
   const SAFE_GAP = 50; // 0.05s
 
   blocks.forEach((b, idx) => {
     const parts = b.timestamp.split(' --> ');
-    if (parts.length !== 2) {
-      stats.ignored++;
-      return;
-    }
+    if (parts.length !== 2) return;
 
     const startMs = timestampToMs(parts[0]);
     const endMs = timestampToMs(parts[1]);
@@ -45,16 +42,16 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): { suggestions: Hyb
     const charCount = text.length;
     const cps = durationS > 0 ? charCount / durationS : 999;
 
-    if (cps < 20) {
-      stats.ignored++;
-    } else if (cps >= 20 && cps <= 30) {
-      stats.localFix++;
-      // Tính toán lý tưởng (Target 20 CPS)
+    // RULE 1: CPS < 20 -> Ignore
+    if (cps < 20) return;
+
+    // RULE 2: 20 <= CPS <= 30 -> Auto Fix Local
+    if (cps >= 20 && cps <= 30) {
       const targetCps = 20;
       const requiredDurationMs = (charCount / targetCps) * 1000;
       let idealEndMs = startMs + requiredDurationMs;
 
-      // Kiểm tra Overlap với câu sau
+      // Check for overlap with next segment
       const nextBlock = blocks[idx + 1];
       if (nextBlock) {
         const nextStartMs = timestampToMs(nextBlock.timestamp.split(' --> ')[0]);
@@ -62,51 +59,70 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): { suggestions: Hyb
         idealEndMs = Math.min(idealEndMs, maxAllowedEnd);
       }
 
-      // Chỉ đề xuất nếu có thể kéo dài thực sự
       if (idealEndMs > endMs) {
-        suggestions.push({
-          id: `local-${b.index}`,
-          index: b.index,
-          type: 'local',
-          cps: cps,
-          charCount: charCount,
-          duration: durationS,
-          beforeTimestamp: b.timestamp,
-          afterTimestamp: `${parts[0]} --> ${msToTimestamp(idealEndMs)}`,
-          beforeText: text,
-          afterText: text,
-          explanation: `Tốc độ đọc ${cps.toFixed(1)} CPS. Đã kéo dài end_time để đạt gần mức 20 CPS mà không gây overlap.`,
-          status: 'pending'
-        });
-      } else {
-        // Cập nhật stats nếu không fix được local
-        stats.ignored++;
+        localFixCount++;
       }
-    } else {
-      stats.aiRequired++;
-      suggestions.push({
+      return;
+    }
+
+    // RULE 3: CPS > 30 -> AI Required
+    if (cps > 30) {
+      aiRequiredSegments.push({
         id: `ai-${b.index}`,
         index: b.index,
-        type: 'ai',
         cps: cps,
         charCount: charCount,
         duration: durationS,
         beforeTimestamp: b.timestamp,
         afterTimestamp: b.timestamp,
         beforeText: text,
-        afterText: text, // Sẽ được AI update sau
-        explanation: `Tốc độ cực cao (${cps.toFixed(1)} CPS). Cần AI can thiệp rút gọn nội dung hoặc chia lại mạch câu.`,
+        afterText: text,
         status: 'pending'
       });
     }
   });
 
-  return { suggestions, stats };
+  return { aiRequiredSegments, localFixCount };
 };
 
 /**
- * Các hàm parse và utility khác
+ * Apply Local Fixes to blocks
  */
+export const applyLocalFixesOnly = (blocks: SubtitleBlock[]): SubtitleBlock[] => {
+  const newBlocks = [...blocks];
+  const SAFE_GAP = 50;
+
+  newBlocks.forEach((b, idx) => {
+    const parts = b.timestamp.split(' --> ');
+    if (parts.length !== 2) return;
+    const startMs = timestampToMs(parts[0]);
+    const endMs = timestampToMs(parts[1]);
+    const durationS = (endMs - startMs) / 1000;
+    const text = b.translatedText || b.originalText;
+    const charCount = text.length;
+    const cps = durationS > 0 ? charCount / durationS : 999;
+
+    if (cps >= 20 && cps <= 30) {
+      const targetCps = 20;
+      const requiredDurationMs = (charCount / targetCps) * 1000;
+      let idealEndMs = startMs + requiredDurationMs;
+
+      const nextBlock = newBlocks[idx + 1];
+      if (nextBlock) {
+        const nextStartMs = timestampToMs(nextBlock.timestamp.split(' --> ')[0]);
+        const maxAllowedEnd = nextStartMs - SAFE_GAP;
+        idealEndMs = Math.min(idealEndMs, maxAllowedEnd);
+      }
+
+      if (idealEndMs > endMs) {
+        b.timestamp = `${parts[0]} --> ${msToTimestamp(idealEndMs)}`;
+      }
+    }
+  });
+
+  return newBlocks;
+};
+
 export const parseSRT = (content: string): SubtitleBlock[] => {
   const blocks: SubtitleBlock[] = [];
   const normalized = content.replace(/\r\n/g, '\n').trim();
