@@ -45,6 +45,7 @@ export interface HybridOptimizeSuggestion {
   beforeText: string;
   afterText: string;
   status: 'pending' | 'processing' | 'applied' | 'error';
+  error?: string;
 }
 
 export interface HybridOptimizeStats {

@@ -7,7 +7,7 @@ import {
   Clock, FastForward, Zap, Settings, Languages, BrainCircuit, Key, Save,
   Maximize2, Layers, CheckSquare, Square, PlusCircle, AlertTriangle,
   Brain, FileJson, FileUp, Sparkle, Scissors, ListChecks, XCircle, Gauge,
-  ZapOff, Filter, BarChart3, MousePointer2
+  ZapOff, Filter, BarChart3, MousePointer2, ShieldAlert
 } from 'lucide-react';
 import { TitleAnalysis, SubtitleBlock, TranslationState, SessionStats, InterruptionInfo, HybridOptimizeSuggestion, HybridOptimizeResult } from './types';
 import { parseSRT, stringifySRT, extractChineseTitle, generateFileName, performQuickAnalyze, applyLocalFixesOnly } from './utils/srtParser';
@@ -41,7 +41,9 @@ const App: React.FC = () => {
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [optimizeStep, setOptimizeStep] = useState<1 | 2>(1);
   const [aiProgress, setAiProgress] = useState(0);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const [optimizeError, setOptimizeError] = useState<string | null>(null);
+  const [isCancelled, setIsCancelled] = useState(false);
+  const cancelFlagRef = useRef(false);
 
   useEffect(() => {
     checkApiHealth(status.selectedModel).then(valid => setStatus(prev => ({ ...prev, apiStatus: valid ? 'valid' : 'invalid' })));
@@ -61,6 +63,9 @@ const App: React.FC = () => {
       if (activeTab === 'translator') handleAnalyze(extractChineseTitle(file.name));
       setOptimizeStep(1);
       setAiRequiredList([]);
+      setOptimizeError(null);
+      setIsCancelled(false);
+      cancelFlagRef.current = false;
     };
     reader.readAsText(file);
   };
@@ -127,13 +132,15 @@ const App: React.FC = () => {
   const runQuickAnalyze = () => {
     if (blocks.length === 0) return;
     setIsQuickAnalyzing(true);
+    setOptimizeError(null);
+    setIsCancelled(false);
+    cancelFlagRef.current = false;
     setTimeout(() => {
-      // Step 1: Internal math analysis & automatic local fix calculation
       const result: HybridOptimizeResult = performQuickAnalyze(blocks);
       setAiRequiredList(result.aiRequiredSegments);
       setIsQuickAnalyzing(false);
       setOptimizeStep(2);
-    }, 800);
+    }, 700);
   };
 
   const applyOptimize = async () => {
@@ -141,64 +148,74 @@ const App: React.FC = () => {
     
     setIsAiProcessing(true);
     setAiProgress(0);
-    abortControllerRef.current = new AbortController();
+    setOptimizeError(null);
+    setIsCancelled(false);
+    cancelFlagRef.current = false;
 
     try {
-      // 1. Apply Local Fixes (20-40 CPS) immediately and transparently
+      // 1. Transparently apply Local Fixes (20-40 CPS)
       const updatedWithLocal = applyLocalFixesOnly(blocks);
       setBlocks(updatedWithLocal);
 
-      // 2. Process AI Required List (>40 CPS) in batches
+      // 2. Process AI required list (>40 CPS) in chunks
       if (aiRequiredList.length > 0) {
-        const BATCH_SIZE = 5;
+        const BATCH_SIZE = 4;
         const total = aiRequiredList.length;
         
         for (let i = 0; i < total; i += BATCH_SIZE) {
-          if (abortControllerRef.current?.signal.aborted) break;
+          if (cancelFlagRef.current) {
+            setIsCancelled(true);
+            break;
+          }
 
           const batch = aiRequiredList.slice(i, i + BATCH_SIZE);
-          batch.forEach(s => s.status = 'processing');
+          batch.forEach(s => { if(s.status === 'pending') s.status = 'processing'; });
           setAiRequiredList([...aiRequiredList]);
 
-          const results = await optimizeHighCpsBatch(batch, updatedWithLocal, status.selectedModel);
-          
-          setBlocks(prev => {
-            const next = [...prev];
-            results.forEach(res => {
-              const idx = next.findIndex(b => b.index === res.id);
-              if (idx !== -1) {
-                next[idx].translatedText = res.afterText;
-                next[idx].timestamp = res.afterTimestamp;
-              }
+          try {
+            const results = await optimizeHighCpsBatch(batch, updatedWithLocal, status.selectedModel);
+            
+            setBlocks(prev => {
+              const next = [...prev];
+              results.forEach(res => {
+                const idx = next.findIndex(b => b.index === res.id);
+                if (idx !== -1) {
+                  next[idx].translatedText = res.afterText;
+                  next[idx].timestamp = res.afterTimestamp;
+                }
+              });
+              return next;
             });
-            return next;
-          });
 
-          // Update the list UI
-          setAiRequiredList(prev => prev.map(s => {
-            const res = results.find(r => r.id === s.index);
-            return res ? { ...s, status: 'applied', afterText: res.afterText, afterTimestamp: res.afterTimestamp } : s;
-          }));
+            setAiRequiredList(prev => prev.map(s => {
+              const res = results.find(r => r.id === s.index);
+              return res ? { ...s, status: 'applied', afterText: res.afterText, afterTimestamp: res.afterTimestamp } : s;
+            }));
 
-          setAiProgress(Math.min(i + BATCH_SIZE, total));
+            setAiProgress(Math.min(i + BATCH_SIZE, total));
+          } catch (batchErr: any) {
+            console.error("Batch Optimization Error:", batchErr);
+            setOptimizeError(batchErr.message || "Unknown API Error");
+            setAiRequiredList(prev => prev.map(s => batch.some(b => b.index === s.index) ? { ...s, status: 'error', error: batchErr.message } : s));
+            // Stop processing further batches if error is critical
+            break;
+          }
         }
       }
 
-      if (!abortControllerRef.current?.signal.aborted) {
-        alert("Đã hoàn tất tối ưu hóa hybrid (Toán học + AI)!");
+      if (!cancelFlagRef.current && !optimizeError) {
+        alert("Đã hoàn tất tối ưu hóa toàn bộ (Toán học + AI)!");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setOptimizeError(err.message || "Failed to start AI optimization");
     } finally {
       setIsAiProcessing(false);
     }
   };
 
   const cancelOptimize = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    setIsAiProcessing(false);
+    cancelFlagRef.current = true;
   };
 
   return (
@@ -245,7 +262,6 @@ const App: React.FC = () => {
                     <p className="text-sm font-bold text-slate-300 uppercase tracking-widest text-center">
                       {isDragging ? 'Thả để tải lên!' : 'Kéo thả file SRT'}
                     </p>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase mt-2 tracking-tighter">Hoặc click để duyệt file</p>
                     <input type="file" ref={fileInputRef} onChange={(e) => e.target.files?.[0] && processFile(e.target.files[0])} accept=".srt" className="hidden" />
                   </div>
                 ) : (
@@ -263,94 +279,65 @@ const App: React.FC = () => {
                   </div>
                 )}
                 {analysis && (
-                  <div className="mt-6 space-y-4 animate-in slide-in-from-top-4 duration-500">
+                  <div className="mt-6 space-y-4">
                     <div className="p-5 bg-slate-800/40 rounded-3xl border border-slate-700/50">
                       <div className="flex items-center gap-2 mb-2">
                         <Sparkle className="text-amber-400" size={16} />
                         <p className="text-sm font-bold text-indigo-400">{analysis.translatedTitle}</p>
                       </div>
-                      <p className="text-[11px] text-slate-400 mt-1 line-clamp-3 leading-relaxed">{analysis.summary}</p>
-                      <div className="flex flex-wrap gap-1.5 mt-4">
-                        {analysis.mainGenres.slice(0, 4).map(g => (
-                          <span key={g} className="px-2.5 py-1 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 rounded-lg text-[9px] font-bold uppercase">{g}</span>
-                        ))}
-                      </div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed line-clamp-2">{analysis.summary}</p>
                     </div>
                     
-                    {!status.isTranslating && !status.fileStatus?.includes('completed') ? (
-                       <button onClick={startTranslation} className="w-full bg-indigo-600 hover:bg-indigo-700 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 shadow-xl shadow-indigo-600/20 transition-all active:scale-[0.98]">
+                    {!status.isTranslating && status.fileStatus !== 'completed' && (
+                       <button onClick={startTranslation} className="w-full bg-indigo-600 hover:bg-indigo-700 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 transition-all active:scale-[0.98]">
                           <Brain size={22} /> Bắt đầu dịch AI
                        </button>
-                    ) : status.isTranslating ? (
+                    )}
+                    {status.isTranslating && (
                       <div className="space-y-4 p-5 bg-slate-800/50 rounded-3xl border border-slate-700">
                         <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                           <span className="flex items-center gap-2"><Loader2 className="animate-spin" size={14}/> Processing...</span>
                           <span>{Math.round((status.progress / (status.total || 1)) * 100)}%</span>
                         </div>
                         <div className="h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
-                          <div className="h-full bg-gradient-to-r from-indigo-500 to-cyan-400 shadow-[0_0_15px_rgba(99,102,241,0.5)] transition-all duration-700" style={{ width: `${(status.progress / (status.total || 1)) * 100}%` }} />
+                          <div className="h-full bg-indigo-500 transition-all duration-700" style={{ width: `${(status.progress / (status.total || 1)) * 100}%` }} />
                         </div>
                       </div>
-                    ) : null}
-
+                    )}
                     {status.fileStatus === 'completed' && (
-                      <button onClick={() => downloadSRT()} className="w-full bg-emerald-600 hover:bg-emerald-700 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 shadow-xl shadow-emerald-600/20 transition-all active:scale-[0.98]">
+                      <button onClick={() => downloadSRT()} className="w-full bg-emerald-600 hover:bg-emerald-700 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 transition-all">
                         <Download size={22} /> Tải file đã dịch
                       </button>
                     )}
                   </div>
                 )}
               </section>
-
-              <section className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl">
-                 <h2 className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] mb-5 flex items-center gap-2">
-                   <Settings size={14} /> AI Engine Selection
-                 </h2>
-                 <div className="relative">
-                    <select 
-                      value={status.selectedModel} 
-                      onChange={(e) => setStatus(prev => ({ ...prev, selectedModel: e.target.value }))}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-5 py-3.5 text-xs font-bold appearance-none cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/30 transition-all"
-                    >
-                      {AI_MODELS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                    </select>
-                    <ChevronRight className="absolute right-5 top-1/2 -translate-y-1/2 rotate-90 text-slate-600 pointer-events-none" size={18} />
-                 </div>
-              </section>
             </div>
 
-            <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-[2.5rem] flex flex-col h-full shadow-2xl overflow-hidden">
-              <div className="p-5 border-b border-slate-800 flex justify-between items-center px-10 bg-slate-900/90 backdrop-blur-xl z-10">
+            <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-[2.5rem] flex flex-col h-full overflow-hidden shadow-2xl">
+              <div className="p-5 border-b border-slate-800 flex justify-between items-center px-10 bg-slate-900/90 backdrop-blur-xl">
                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.3em]">Subtitle Monitor</span>
-                <div className="flex gap-4">
-                  <span className="text-[9px] font-bold text-indigo-400 uppercase px-3 py-1 bg-indigo-500/10 rounded-lg border border-indigo-500/20">ZH → VI</span>
-                </div>
               </div>
               <div className="flex-1 overflow-y-auto p-8 space-y-5 custom-scrollbar bg-slate-950/20">
                 {blocks.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center opacity-10 text-slate-400">
+                  <div className="h-full flex flex-col items-center justify-center opacity-10">
                     <Box size={100} strokeWidth={0.5} />
                     <p className="text-sm font-bold uppercase tracking-widest mt-4">Waiting for file...</p>
                   </div>
                 ) : (
                   blocks.slice(0, 150).map(b => (
                     <div key={b.index} className="group p-5 bg-slate-900/30 rounded-3xl border border-slate-800/50 hover:border-indigo-500/30 transition-all duration-300">
-                      <div className="flex justify-between mb-3">
-                        <span className="text-[10px] font-mono text-slate-600 group-hover:text-indigo-400 transition-colors">#{b.index.toString().padStart(3, '0')} — {b.timestamp}</span>
+                      <div className="flex justify-between mb-3 text-[10px] font-mono text-slate-600 group-hover:text-indigo-400">
+                        <span>#{b.index.toString().padStart(3, '0')} — {b.timestamp}</span>
                       </div>
                       <p className="text-xs text-slate-500 italic mb-2.5 leading-relaxed">{b.originalText}</p>
-                      <div className="pl-4 border-l-2 border-indigo-500/20 py-1">
-                        <p className="text-sm font-bold text-slate-100 font-serif-vi leading-relaxed">
-                          {b.translatedText || <span className="text-slate-800 animate-pulse">Pending...</span>}
+                      <div className="pl-4 border-l-2 border-indigo-500/20">
+                        <p className="text-sm font-bold text-slate-100 font-serif-vi">
+                          {b.translatedText || <span className="text-slate-800">Pending...</span>}
                         </p>
                       </div>
                     </div>
                   ))
-                )}
-                {blocks.length > 150 && (
-                  <div className="p-6 text-center">
-                    <p className="text-[10px] font-bold text-slate-700 uppercase tracking-widest italic">... showing 150 / {blocks.length} segments ...</p>
-                  </div>
                 )}
               </div>
             </div>
@@ -366,61 +353,54 @@ const App: React.FC = () => {
                     onDragOver={handleDragOver}
                     onDragLeave={handleDragLeave}
                     onDrop={handleDrop}
-                    className={`border-2 border-dashed rounded-[2.5rem] p-20 flex flex-col items-center justify-center cursor-pointer transition-all duration-500 ${
-                      isDragging 
-                      ? 'border-indigo-400 bg-indigo-500/10 scale-[1.02]' 
-                      : 'border-slate-700 hover:border-indigo-500'
-                    }`}
+                    className="border-2 border-dashed border-slate-700 rounded-[2.5rem] p-20 flex flex-col items-center justify-center cursor-pointer hover:border-indigo-500 transition-all duration-500"
                   >
-                    <div className="w-24 h-24 bg-indigo-600/10 rounded-[2rem] flex items-center justify-center mb-8 border border-indigo-500/20 shadow-inner">
+                    <div className="w-24 h-24 bg-indigo-600/10 rounded-[2rem] flex items-center justify-center mb-8 border border-indigo-500/20">
                       <Zap className="text-indigo-400" size={48} />
                     </div>
                     <h2 className="text-3xl font-bold mb-4 tracking-tight">Hybrid Optimizer</h2>
                     <p className="text-slate-400 text-sm mb-10 leading-relaxed max-w-md mx-auto">
-                      Hệ thống tự động xử lý CPS bằng toán học (20-40) và dùng AI cho các ca khó (&gt;40). <br/>
-                      Vui lòng kéo thả file vào đây để bắt đầu.
+                      Tối ưu hóa CPS thông minh: Toán học an toàn cho 20-40 CPS, AI chuyên sâu cho &gt;40 CPS.
                     </p>
-                    <div className="flex items-center gap-3 bg-indigo-600 px-10 py-5 rounded-2xl font-bold text-white shadow-2xl shadow-indigo-600/30 hover:bg-indigo-700 transition-all transform active:scale-95">
+                    <div className="flex items-center gap-3 bg-indigo-600 px-10 py-5 rounded-2xl font-bold text-white shadow-2xl shadow-indigo-600/30 hover:bg-indigo-700 transition-all">
                       <MousePointer2 size={24} /> Chọn file SRT
                     </div>
-                    <input type="file" ref={fileInputRef} onChange={(e) => e.target.files?.[0] && processFile(e.target.files[0])} accept=".srt" className="hidden" />
                   </div>
                </section>
             ) : optimizeStep === 1 ? (
-              <section className="bg-slate-900 border border-slate-800 rounded-[3rem] p-16 text-center max-w-3xl mx-auto shadow-2xl my-12 animate-in zoom-in-95">
+              <section className="bg-slate-900 border border-slate-800 rounded-[3rem] p-16 text-center max-w-3xl mx-auto shadow-2xl my-12">
                 <div className="w-24 h-24 bg-indigo-600/10 rounded-[2rem] flex items-center justify-center mx-auto mb-8 border border-indigo-500/20">
                   <Gauge className="text-indigo-400" size={48} />
                 </div>
-                <h2 className="text-3xl font-bold mb-5 tracking-tight">Sẵn sàng phân tích {fileName}</h2>
+                <h2 className="text-3xl font-bold mb-5 tracking-tight">Quick Analyze {fileName}</h2>
                 <p className="text-slate-400 text-sm mb-10 leading-relaxed max-w-lg mx-auto">
-                  Sử dụng Smart Hybrid: Bỏ qua &lt;20, Tự fix 20-40, Dùng AI cho &gt;40.
+                  Smart Hybrid Mode: Auto math-fix for 20-40 CPS. AI-only for &gt;40 CPS errors.
                 </p>
                 <div className="flex gap-4 justify-center">
-                  <button onClick={runQuickAnalyze} disabled={isQuickAnalyzing} className="px-12 py-5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-2xl flex items-center justify-center gap-3 transition-all active:scale-95 shadow-2xl shadow-indigo-600/20">
+                  <button onClick={runQuickAnalyze} disabled={isQuickAnalyzing} className="px-12 py-5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-2xl flex items-center justify-center gap-3 shadow-2xl transition-all active:scale-95">
                     {isQuickAnalyzing ? <Loader2 className="animate-spin" /> : <BarChart3 size={24} />} 
-                    {isQuickAnalyzing ? 'Phân tích nhanh...' : 'Bắt đầu Quick Analyze'}
+                    {isQuickAnalyzing ? 'Analyzing...' : 'Start Quick Analyze'}
                   </button>
-                  <button onClick={() => {setFileName(''); setBlocks([]);}} className="px-8 py-5 bg-slate-800 hover:bg-slate-700 text-slate-400 font-bold rounded-2xl transition-all">Thay đổi file</button>
                 </div>
               </section>
             ) : (
-              <div className="space-y-8 animate-in slide-in-from-bottom-6 duration-500 max-w-5xl mx-auto">
+              <div className="space-y-8 max-w-5xl mx-auto pb-12">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="bg-slate-900/50 backdrop-blur-md p-8 rounded-[2.5rem] border border-slate-800 text-center shadow-lg group hover:border-red-500/20 transition-all">
+                  <div className="bg-slate-900/50 backdrop-blur-md p-8 rounded-[2.5rem] border border-slate-800 text-center shadow-lg hover:border-red-500/20 transition-all group">
                     <p className="text-[11px] text-slate-500 uppercase font-bold mb-2 tracking-[0.2em] group-hover:text-red-400">AI REQUIRED SEGMENTS</p>
-                    <p className="text-4xl font-black tracking-tighter text-red-500">{aiRequiredList.length}</p>
-                    <p className="text-[10px] text-slate-600 mt-2 italic">(Tốc độ đọc &gt; 40 CPS)</p>
+                    <p className="text-4xl font-black text-red-500">{aiRequiredList.length}</p>
+                    <p className="text-[10px] text-slate-600 mt-2 italic">(&gt; 40 CPS — Needs AI Rewriting)</p>
                   </div>
                   <div className="bg-slate-900/50 backdrop-blur-md p-8 rounded-[2.5rem] border border-slate-800 text-center shadow-lg">
                     <div className="flex flex-col h-full justify-center">
-                      <p className="text-slate-400 text-xs mb-6">Mọi lỗi 20-40 CPS sẽ được fix an toàn bằng toán học khi bấm nút bên dưới.</p>
+                      <p className="text-slate-400 text-xs mb-6">Local math fixes for 20-40 CPS will be applied transparently.</p>
                       <div className="flex gap-3 justify-center">
                          {!isAiProcessing ? (
-                            <button onClick={applyOptimize} className="flex-1 px-8 py-5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-2xl flex items-center justify-center gap-3 shadow-2xl shadow-red-600/30 transition-all transform active:scale-95">
+                            <button onClick={applyOptimize} className="flex-1 px-8 py-5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-2xl flex items-center justify-center gap-3 shadow-2xl shadow-red-600/30 transition-all active:scale-95">
                                <Brain size={24} /> APPLY AI OPTIMIZE
                             </button>
                          ) : (
-                            <button onClick={cancelOptimize} className="flex-1 px-8 py-5 bg-slate-800 hover:bg-red-500/10 text-red-400 font-bold rounded-2xl border border-red-500/30 flex items-center justify-center gap-3 transition-all">
+                            <button onClick={cancelOptimize} className="flex-1 px-8 py-5 bg-slate-800 text-red-400 font-bold rounded-2xl border border-red-500/30 flex items-center justify-center gap-3 hover:bg-red-500/5 transition-all">
                                <XCircle size={22} /> Cancel Optimize
                             </button>
                          )}
@@ -430,10 +410,10 @@ const App: React.FC = () => {
                 </div>
 
                 {isAiProcessing && (
-                  <div className="bg-slate-900/80 p-6 rounded-3xl border border-red-500/20 animate-pulse shadow-2xl shadow-red-500/5">
+                  <div className="bg-slate-900/80 p-6 rounded-3xl border border-red-500/20 animate-pulse shadow-2xl">
                     <div className="flex justify-between items-center mb-4 px-2">
                        <p className="text-xs font-bold text-red-400 uppercase tracking-widest flex items-center gap-2">
-                         <Activity size={16} /> Processing {aiProgress} / {aiRequiredList.length} critical segments...
+                         <Activity size={16} /> Processing {aiProgress} / {aiRequiredList.length} segments...
                        </p>
                        <span className="text-xs font-mono font-bold text-red-400">{Math.round((aiProgress / aiRequiredList.length) * 100)}%</span>
                     </div>
@@ -443,23 +423,37 @@ const App: React.FC = () => {
                   </div>
                 )}
 
+                {(isCancelled || optimizeError) && (
+                  <div className={`p-6 rounded-3xl border shadow-xl flex items-start gap-4 animate-in slide-in-from-top-4 ${optimizeError ? 'bg-red-500/10 border-red-500/30' : 'bg-amber-500/10 border-amber-500/30'}`}>
+                    {optimizeError ? <ShieldAlert className="text-red-500 flex-shrink-0" size={24} /> : <XCircle className="text-amber-500 flex-shrink-0" size={24} />}
+                    <div>
+                      <p className={`font-bold uppercase text-xs tracking-widest mb-1 ${optimizeError ? 'text-red-500' : 'text-amber-500'}`}>
+                        {optimizeError ? '⛔ AI Optimization Error' : '⛔ Optimization Cancelled'}
+                      </p>
+                      <p className="text-sm text-slate-300">
+                        {optimizeError ? `Reason: ${optimizeError}` : `Completed ${aiProgress} / ${aiRequiredList.length} segments.`}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden shadow-2xl">
                    <div className="p-8 border-b border-slate-800 flex justify-between items-center bg-slate-900/90 backdrop-blur-xl sticky top-0 z-10">
                      <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-3">
-                       <ListChecks size={20}/> Review AI Optimization List (&gt;40 CPS)
+                       <ListChecks size={20}/> AI Review List (&gt;40 CPS)
                      </h3>
                      <div className="flex gap-4">
                        <button onClick={() => downloadSRT(true)} className="px-6 py-2.5 bg-emerald-600/10 text-emerald-400 hover:bg-emerald-600/20 border border-emerald-600/20 rounded-xl text-xs font-bold uppercase transition-all flex items-center gap-2">
-                         <Download size={16}/> Tải bản Optimized
+                         <Download size={16}/> Download Current File
                        </button>
-                       <button onClick={() => setOptimizeStep(1)} className="text-xs font-bold text-slate-500 hover:text-slate-300 uppercase transition-colors">Quay lại</button>
+                       <button onClick={() => setOptimizeStep(1)} className="text-xs font-bold text-slate-500 hover:text-slate-300 uppercase transition-colors">Analyze Again</button>
                      </div>
                    </div>
                    <div className="p-8 max-h-[700px] overflow-y-auto space-y-6 custom-scrollbar bg-slate-950/20">
                      {aiRequiredList.length === 0 ? (
                        <div className="py-24 text-center space-y-5 opacity-40">
                          <CheckCircle2 size={80} className="mx-auto text-emerald-500" strokeWidth={0.5} />
-                         <p className="text-sm font-bold uppercase tracking-[0.4em]">No severe CPS errors found (&gt;40)</p>
+                         <p className="text-sm font-bold uppercase tracking-[0.4em]">All segments below 40 CPS threshold</p>
                        </div>
                      ) : aiRequiredList.map(s => (
                        <div key={s.id} className={`group p-6 rounded-[2rem] border transition-all duration-500 ${
@@ -467,11 +461,13 @@ const App: React.FC = () => {
                          ? 'bg-emerald-500/5 border-emerald-500/20 shadow-lg shadow-emerald-500/5' 
                          : s.status === 'processing'
                          ? 'bg-indigo-500/5 border-indigo-500/40 animate-pulse'
+                         : s.status === 'error'
+                         ? 'bg-red-500/5 border-red-500/40'
                          : 'bg-slate-900/50 border-slate-800 hover:border-slate-700'
                        }`}>
                          <div className="flex justify-between items-center mb-5">
                            <div className="flex items-center gap-4">
-                             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${s.cps > 50 ? 'bg-red-500/20 text-red-400 animate-bounce-short' : 'bg-red-500/10 text-red-400'}`}>
+                             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${s.cps > 50 ? 'bg-red-500/20 text-red-400' : 'bg-red-500/10 text-red-400'}`}>
                                <Zap size={22} fill="currentColor" />
                              </div>
                              <div>
@@ -487,24 +483,28 @@ const App: React.FC = () => {
                              <span className="flex items-center gap-2 px-4 py-1.5 bg-indigo-500/10 text-indigo-400 rounded-full text-[10px] font-bold uppercase border border-indigo-500/20">
                                <Loader2 size={14} className="animate-spin" /> Shortening...
                              </span>
+                           ) : s.status === 'error' ? (
+                             <span className="flex items-center gap-2 px-4 py-1.5 bg-red-500/10 text-red-400 rounded-full text-[10px] font-bold uppercase border border-red-500/20">
+                               <AlertTriangle size={14} /> AI Error
+                             </span>
                            ) : (
                              <span className="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-4 py-1.5 bg-slate-800 rounded-full">Marked for AI</span>
                            )}
                          </div>
                          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                            <div className="space-y-3">
-                             <p className="text-[10px] text-slate-600 uppercase font-bold tracking-widest pl-2">Hiện tại:</p>
+                             <p className="text-[10px] text-slate-600 uppercase font-bold tracking-widest pl-2">Current:</p>
                              <div className="p-5 bg-slate-950/80 rounded-2xl border border-slate-800/80">
                                <p className="text-[10px] font-mono text-slate-500 mb-3">{s.beforeTimestamp}</p>
                                <p className="text-xs text-slate-400 leading-relaxed font-serif-vi">{s.beforeText}</p>
                              </div>
                            </div>
                            <div className="space-y-3">
-                             <p className="text-[10px] text-red-500 uppercase font-bold tracking-widest pl-2">AI Output:</p>
+                             <p className="text-[10px] text-red-500 uppercase font-bold tracking-widest pl-2">AI Result:</p>
                              <div className={`p-5 rounded-2xl border transition-all duration-700 ${s.status === 'applied' ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-slate-950/40 border-slate-800'}`}>
                                <p className={`text-[10px] font-mono mb-3 ${s.afterText !== s.beforeText ? 'text-emerald-400 font-bold' : 'text-slate-600'}`}>{s.afterTimestamp}</p>
                                <p className={`text-xs leading-relaxed font-serif-vi ${s.afterText !== s.beforeText ? 'text-emerald-400 font-bold text-sm' : 'text-slate-500'}`}>
-                                 {s.afterText !== s.beforeText ? s.afterText : <span className="opacity-30 italic">... waiting for AI context analysis ...</span>}
+                                 {s.afterText !== s.beforeText ? s.afterText : <span className="opacity-30 italic">... waiting ...</span>}
                                </p>
                              </div>
                            </div>
@@ -521,11 +521,10 @@ const App: React.FC = () => {
 
       <footer className="p-5 text-center border-t border-slate-900 bg-slate-950/90 z-20">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-           <p className="text-slate-700 text-[10px] uppercase tracking-[0.4em] font-bold">Donghua AI Subtitle Engine • v5.1 Smart Hybrid</p>
+           <p className="text-slate-700 text-[10px] uppercase tracking-[0.4em] font-bold">Donghua AI Subtitle Engine • v5.2 Smart Hybrid</p>
            <div className="flex gap-6 text-[9px] font-bold text-slate-600 uppercase tracking-widest">
               <span className="flex items-center gap-1.5"><ShieldCheck size={12}/> AI-Powered Context</span>
               <span className="flex items-center gap-1.5"><Zap size={12}/> Math Optimization</span>
-              <span className="flex items-center gap-1.5"><Activity size={12}/> Safe timeline</span>
            </div>
         </div>
       </footer>
