@@ -23,11 +23,17 @@ const withRetry = async <T>(fn: () => Promise<T>, retries = 3, delay = 2000): Pr
   }
 };
 
+const MAP_MODEL_ID = (modelName: string): string => {
+  const name = modelName.toLowerCase();
+  if (name.includes('pro')) return 'gemini-3-pro-preview';
+  return 'gemini-3-flash-preview';
+};
+
 export const checkApiHealth = async (model: string): Promise<boolean> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   try {
     await withRetry(() => ai.models.generateContent({
-      model: model,
+      model: MAP_MODEL_ID(model),
       contents: "hi",
       config: { 
         maxOutputTokens: 10,
@@ -61,7 +67,7 @@ YÊU CẦU ĐẦU RA (JSON):
 }`;
 
   const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
-    model: model,
+    model: MAP_MODEL_ID(model),
     contents: prompt,
     config: {
       responseMimeType: "application/json",
@@ -127,7 +133,7 @@ TRẢ VỀ JSON: [{"id": "...", "translated": "..."}]`;
 
     try {
       const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
-        model: model,
+        model: MAP_MODEL_ID(model),
         contents: prompt,
         config: {
           responseMimeType: "application/json",

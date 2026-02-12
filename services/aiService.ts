@@ -6,11 +6,14 @@ const getProvider = (modelName: string): AiProvider => {
   return modelName.toLowerCase().includes('gpt') ? 'openai' : 'gemini';
 };
 
-// Prioritize Gemini 2.5 series as requested
+/**
+ * Mapping user-friendly names to actual Gemini Model IDs.
+ * Using gemini-3 series as they are the recommended models for text tasks.
+ */
 const MAP_MODEL_ID = (modelName: string): string => {
   const name = modelName.toLowerCase();
-  if (name.includes('pro')) return 'gemini-2.5-pro-preview';
-  return 'gemini-2.5-flash-preview';
+  if (name.includes('pro')) return 'gemini-3-pro-preview';
+  return 'gemini-3-flash-preview';
 };
 
 const withRetry = async <T>(fn: () => Promise<T>, retries = 2, delay = 2000): Promise<T> => {
@@ -30,7 +33,11 @@ export const checkApiHealth = async (model: string): Promise<boolean> => {
   if (!apiKey) return false;
   try {
     const ai = new GoogleGenAI({ apiKey });
-    await withRetry(() => ai.models.generateContent({ model: MAP_MODEL_ID(model), contents: "hi", config: { maxOutputTokens: 5 } }));
+    await withRetry(() => ai.models.generateContent({ 
+      model: MAP_MODEL_ID(model), 
+      contents: "hi", 
+      config: { maxOutputTokens: 5 } 
+    }));
     return true;
   } catch { return false; }
 };
