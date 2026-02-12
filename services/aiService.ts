@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { SubtitleBlock, TitleAnalysis, AiProvider } from "../types";
+import { SubtitleBlock, TitleAnalysis, AiProvider, AutoOptimizeSuggestion } from "../types";
 
 /**
  * Xác định Provider dựa trên tên Model
@@ -14,6 +14,9 @@ const getProvider = (modelName: string): AiProvider => {
  */
 const MAP_MODEL_ID = (modelName: string): string => {
   const name = modelName.toLowerCase();
+  if (name === 'gemini 2.5 flash') return 'gemini-3-flash-preview';
+  if (name === 'gemini 2.5 pro') return 'gemini-3-pro-preview';
+  
   if (name.includes('gemini')) {
     if (name.includes('pro')) return 'gemini-3-pro-preview';
     if (name.includes('flash')) return 'gemini-3-flash-preview';
@@ -29,7 +32,6 @@ const withRetry = async <T>(fn: () => Promise<T>, retries = 2, delay = 2000): Pr
     const errorStr = error?.toString() || "";
     const isRetryable = errorStr.includes("429") || errorStr.includes("500") || errorStr.includes("503") || errorStr.toLowerCase().includes("quota");
     if (retries > 0 && isRetryable) {
-      console.warn(`[AI Service] Gặp lỗi có thể thử lại. Đang thử lại sau ${delay}ms... (Còn ${retries} lần)`);
       await new Promise(resolve => setTimeout(resolve, delay));
       return withRetry(fn, retries - 1, delay * 2);
     }
@@ -37,16 +39,7 @@ const withRetry = async <T>(fn: () => Promise<T>, retries = 2, delay = 2000): Pr
   }
 };
 
-/**
- * Gọi API OpenAI thông qua fetch
- */
 const callOpenAi = async (model: string, apiKey: string, prompt: string, isJson: boolean) => {
-  if (!apiKey || apiKey.startsWith('AIza')) {
-    const msg = "Vui lòng nhập OpenAI API Key hợp lệ. Hệ thống không thể dùng Key mặc định của Gemini cho OpenAI.";
-    console.error(`[OpenAI Error] ${msg}`);
-    throw new Error(msg);
-  }
-
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -58,15 +51,13 @@ const callOpenAi = async (model: string, apiKey: string, prompt: string, isJson:
         model: model,
         messages: [{ role: "user", content: prompt }],
         response_format: isJson ? { type: "json_object" } : undefined,
-        temperature: 0.3
+        temperature: 0.1
       })
     });
 
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
-      const errorMsg = errData.error?.message || `OpenAI API Error: ${response.status}`;
-      console.error("[OpenAI API Details]", { status: response.status, error: errData.error });
-      throw new Error(errorMsg);
+      throw new Error(errData.error?.message || `OpenAI API Error: ${response.status}`);
     }
 
     const data = await response.json();
@@ -75,22 +66,14 @@ const callOpenAi = async (model: string, apiKey: string, prompt: string, isJson:
       tokens: data.usage.total_tokens
     };
   } catch (error) {
-    console.error("[OpenAI Connection Error]", error);
     throw error;
   }
 };
 
-/**
- * Kiểm tra trạng thái API
- */
-export const checkApiHealth = async (model: string, customKey?: string): Promise<boolean> => {
+export const checkApiHealth = async (model: string): Promise<boolean> => {
   const provider = getProvider(model);
-  const apiKey = provider === 'openai' ? customKey : (customKey || process.env.API_KEY);
-  
-  if (!apiKey) {
-    console.warn(`[Health Check] Không có API Key cho ${provider}.`);
-    return false;
-  }
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) return false;
 
   try {
     if (provider === 'openai') {
@@ -106,22 +89,17 @@ export const checkApiHealth = async (model: string, customKey?: string): Promise
       }));
       return true;
     }
-  } catch (e: any) {
-    console.error(`[Health Check Failed] Model: ${model}, Provider: ${provider}`, e);
+  } catch (e) {
     return false;
   }
 };
 
-/**
- * Phân tích tiêu đề
- */
-export const analyzeTitle = async (title: string, model: string, customKey?: string): Promise<{ analysis: TitleAnalysis, tokens: number }> => {
+export const analyzeTitle = async (title: string, model: string): Promise<{ analysis: TitleAnalysis, tokens: number }> => {
   const provider = getProvider(model);
-  const apiKey = provider === 'openai' ? customKey : (customKey || process.env.API_KEY);
-  
-  if (!apiKey) throw new Error(provider === 'openai' ? "Vui lòng nhập OpenAI API KEY." : "Hệ thống chưa có API KEY.");
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) throw new Error("Hệ thống chưa có API KEY.");
 
-  const prompt = `Bạn là một AI chuyên gia phân tích tiêu đề Donghua. Phân tích tiêu đề "${title}" trả về JSON.`;
+  const prompt = `Phân tích tiêu đề Donghua "${title}" trả về JSON.`;
 
   try {
     if (provider === 'gemini') {
@@ -158,24 +136,18 @@ export const analyzeTitle = async (title: string, model: string, customKey?: str
       };
     }
   } catch (error) {
-    console.error("[Analyze Title Error]", error);
     throw error;
   }
 };
 
-/**
- * Dịch phụ đề
- */
 export const translateSubtitles = async (
   blocks: SubtitleBlock[],
   analysis: TitleAnalysis,
   model: string,
-  onProgress: (translatedCount: number, tokensAdded: number) => void,
-  customKey?: string
+  onProgress: (translatedCount: number, tokensAdded: number) => void
 ): Promise<SubtitleBlock[]> => {
   const provider = getProvider(model);
-  const apiKey = provider === 'openai' ? customKey : (customKey || process.env.API_KEY);
-  
+  const apiKey = process.env.API_KEY;
   if (!apiKey) throw new Error("Thiếu API KEY.");
 
   const CHUNK_SIZE = 8;
@@ -191,7 +163,7 @@ export const translateSubtitles = async (
       continue;
     }
 
-    const prompt = `Dịch phụ đề Donghua sang tiếng Việt. Phim: ${analysis.translatedTitle}. Dữ liệu: ${JSON.stringify(pendingInChunk.map(b => ({ id: b.index, text: b.originalText })))}`;
+    const prompt = `Dịch phụ đề Donghua: ${analysis.translatedTitle}. Dữ liệu: ${JSON.stringify(pendingInChunk.map(b => ({ id: b.index, text: b.originalText })))}`;
 
     try {
       let resultText = "";
@@ -234,10 +206,84 @@ export const translateSubtitles = async (
       onProgress(Math.min(i + CHUNK_SIZE, blocks.length), tokensUsed);
       await new Promise(r => setTimeout(r, 600));
     } catch (error) { 
-      console.error(`[Translation Chunk Error] Index ${i}:`, error);
       throw error; 
     }
   }
 
   return translatedBlocks;
+};
+
+/**
+ * Phân tích một batch SRT duy nhất để hỗ trợ logic hủy từ phía caller (App.tsx)
+ */
+export const analyzeSrtBatch = async (
+  chunk: any[],
+  model: string
+): Promise<{ suggestions: AutoOptimizeSuggestion[], tokens: number }> => {
+  const provider = getProvider(model);
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) throw new Error("Thiếu API KEY.");
+
+  const internalModel = MAP_MODEL_ID(model);
+  const prompt = `Bạn là AI tối ưu hóa SRT ở chế độ STRICT MODE (Bảo thủ tối đa).
+Nhiệm vụ: Chỉ đề xuất chỉnh sửa nếu có lỗi thực sự. KHÔNG sửa nếu không chắc chắn.
+
+CÁC LỖI ĐƯỢC PHÉP ĐỀ XUẤT:
+1. TRÙNG LẶP THỰC SỰ: Nội dung giống >95% ở 2 đoạn liên tiếp.
+2. TIMING LỖI NGHIÊM TRỌNG: Duration < 300ms hoặc overlap rõ ràng.
+3. CÂU BỊ CẮT ĐỨT: Đoạn trước chưa hết câu, đoạn sau bắt đầu bằng chữ thường, ghép lại mới mạch lạc.
+
+QUY TẮC ĐỘ DÀI (BẮT BUỘC):
+- Sau khi gộp: Tối đa 2 dòng.
+- Mỗi dòng: Tối đa 42 ký tự. Nếu vượt quá, KHÔNG ĐƯỢC gộp.
+
+CHỈ TRẢ VỀ ĐỀ XUẤT NẾU ĐỘ TIN CẬY (CONFIDENCE) >= 85%.
+
+Dữ liệu batch: ${JSON.stringify(chunk)}
+
+Trả về JSON ARRAY các đề xuất tối ưu. Nếu không có lỗi rõ ràng, trả về mảng trống [].
+Schema: [{"id": "...", "type": "merge|delete|adjust|edit", "indices": ["..."], "before": "...", "after": "...", "reason": "...", "explanation": "...", "proposedTimestamp": "..."}]`;
+
+  try {
+    let resultText = "";
+    let tokensUsed = 0;
+
+    if (provider === 'gemini') {
+      const ai = new GoogleGenAI({ apiKey });
+      const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
+        model: internalModel,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                type: { type: Type.STRING, enum: ["merge", "delete", "adjust", "edit"] },
+                indices: { type: Type.ARRAY, items: { type: Type.STRING } },
+                before: { type: Type.STRING },
+                after: { type: Type.STRING },
+                reason: { type: Type.STRING },
+                explanation: { type: Type.STRING },
+                proposedTimestamp: { type: Type.STRING }
+              },
+              required: ["id", "type", "indices", "before", "after", "reason", "explanation"]
+            }
+          }
+        }
+      }));
+      resultText = response.text || "[]";
+      tokensUsed = response.usageMetadata?.totalTokenCount || 0;
+    } else {
+      const res = await withRetry(() => callOpenAi(model, apiKey, prompt, true));
+      resultText = res.text || "[]";
+      tokensUsed = res.tokens;
+    }
+
+    return { suggestions: JSON.parse(resultText), tokens: tokensUsed };
+  } catch (error) {
+    throw error;
+  }
 };

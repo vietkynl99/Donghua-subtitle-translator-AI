@@ -29,6 +29,31 @@ export interface SubtitleBlock {
   translatedText?: string;
 }
 
+export interface ProposedChange {
+  id: string;
+  start: string;
+  end: string;
+  text: string;
+  startMs: number;
+  hardContext?: string | null;
+  reason: string;
+  contextAnalysis: string;
+  isValid: boolean;
+  hardBefore?: string | null;
+  hardAfter?: string | null;
+}
+
+export interface AutoOptimizeSuggestion {
+  id: string;
+  type: 'merge' | 'delete' | 'adjust' | 'edit';
+  indices: string[];
+  before: string;
+  after: string;
+  reason: string;
+  explanation: string;
+  proposedTimestamp?: string;
+}
+
 export interface SessionStats {
   requests: number;
   totalTokens: number;
@@ -54,5 +79,4 @@ export interface TranslationState {
   fileStatus: 'new' | 'mixed' | 'completed' | null;
   apiStatus: 'checking' | 'valid' | 'invalid' | 'unknown';
   selectedModel: string;
-  userApiKey?: string;
 }
