@@ -136,6 +136,7 @@ const App: React.FC = () => {
     setIsCancelled(false);
     cancelFlagRef.current = false;
     setTimeout(() => {
+      // Step 1: Calculate categorization and math improvements locally
       const result: HybridOptimizeResult = performQuickAnalyze(blocks);
       setAiRequiredList(result.aiRequiredSegments);
       setIsQuickAnalyzing(false);
@@ -153,11 +154,11 @@ const App: React.FC = () => {
     cancelFlagRef.current = false;
 
     try {
-      // 1. Transparently apply Local Fixes (20-40 CPS range)
+      // 1. Instantly apply Local Math Fixes (20-40 CPS) to the current blocks
       const updatedWithLocal = applyLocalFixesOnly(blocks);
       setBlocks(updatedWithLocal);
 
-      // 2. Process AI required list (>40 CPS) in chunks for real-time update
+      // 2. Process AI required list (>40 CPS) with real-time feedback
       if (aiRequiredList.length > 0) {
         const BATCH_SIZE = 4;
         const total = aiRequiredList.length;
@@ -169,7 +170,8 @@ const App: React.FC = () => {
           }
 
           const batch = aiRequiredList.slice(i, i + BATCH_SIZE);
-          // Mark as processing immediately for UI feedback
+          
+          // Mark batch as processing in UI
           setAiRequiredList(prev => prev.map(s => 
             batch.some(b => b.index === s.index) ? { ...s, status: 'processing' } : s
           ));
@@ -177,7 +179,7 @@ const App: React.FC = () => {
           try {
             const results = await optimizeHighCpsBatch(batch, updatedWithLocal, status.selectedModel);
             
-            // Apply immediately to the global blocks state for "Download Current File" support
+            // Update the source blocks state (Real-time update)
             setBlocks(prev => {
               const next = [...prev];
               results.forEach(res => {
@@ -190,7 +192,7 @@ const App: React.FC = () => {
               return next;
             });
 
-            // Update local list with results and highlight time
+            // Update the optimization UI list with highlight timestamps
             setAiRequiredList(prev => prev.map(s => {
               const res = results.find(r => r.id === s.index);
               return res ? { 
@@ -203,14 +205,14 @@ const App: React.FC = () => {
             }));
 
             setAiProgress(Math.min(i + BATCH_SIZE, total));
-            // Tiny delay to ensure UI cycles
-            await new Promise(r => setTimeout(r, 100));
+            // Tiny sleep to ensure UI paints and user feels the "real-time" progress
+            await new Promise(r => setTimeout(r, 150));
           } catch (batchErr: any) {
-            console.error("Optimization Batch Error:", batchErr);
-            const errMsg = batchErr.message || "Network Error / API Limit";
-            setOptimizeError(errMsg);
+            console.error("AI Batch Error:", batchErr);
+            const msg = batchErr.message || "API Connection Interrupted";
+            setOptimizeError(msg);
             setAiRequiredList(prev => prev.map(s => 
-              batch.some(b => b.index === s.index) ? { ...s, status: 'error', error: errMsg } : s
+              batch.some(b => b.index === s.index) ? { ...s, status: 'error', error: msg } : s
             ));
             break;
           }
@@ -218,11 +220,11 @@ const App: React.FC = () => {
       }
 
       if (!cancelFlagRef.current && !optimizeError) {
-        // Success notification is handled by UI state change
+        // All finished
       }
     } catch (err: any) {
       console.error(err);
-      setOptimizeError(err.message || "Failed to start optimization");
+      setOptimizeError(err.message || "Failed to start AI optimization sequence");
     } finally {
       setIsAiProcessing(false);
     }
@@ -244,7 +246,7 @@ const App: React.FC = () => {
           </div>
           <nav className="flex items-center bg-slate-800/50 p-1 rounded-2xl border border-slate-700/50">
             <button onClick={() => setActiveTab('translator')} className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${activeTab === 'translator' ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-500/20' : 'text-slate-400 hover:text-slate-200'}`}>Dịch SRT</button>
-            <button onClick={() => setActiveTab('hybrid-optimize')} className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${activeTab === 'hybrid-optimize' ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-500/20' : 'text-slate-400 hover:text-slate-200'}`}>🔥 Optimize</button>
+            <button onClick={() => setActiveTab('hybrid-optimize')} className={`px-5 py-2 rounded-xl text-xs font-bold transition-all ${activeTab === 'hybrid-optimize' ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-500/20' : 'text-slate-400 hover:text-slate-200'}`}>🔥 OPTIMIZE</button>
           </nav>
           <div className="hidden md:flex items-center gap-3 bg-slate-900 px-4 py-2 rounded-2xl border border-slate-800">
             <div className={`w-2 h-2 rounded-full ${status.apiStatus === 'valid' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]'}`} />
@@ -374,11 +376,12 @@ const App: React.FC = () => {
                     </div>
                     <h2 className="text-3xl font-bold mb-4 tracking-tight">Hybrid Optimizer</h2>
                     <p className="text-slate-400 text-sm mb-10 leading-relaxed max-w-md mx-auto">
-                      Tối ưu hóa CPS thông minh: Toán học an toàn cho 20-40 CPS, AI chuyên sâu cho &gt;40 CPS.
+                      Hệ thống tự động xử lý CPS bằng toán học (20-40) và dùng AI cho các ca khó (&gt;40).
                     </p>
                     <div className="flex items-center gap-3 bg-indigo-600 px-10 py-5 rounded-2xl font-bold text-white shadow-2xl shadow-indigo-600/30 hover:bg-indigo-700 transition-all active:scale-95">
                       <MousePointer2 size={24} /> Chọn file SRT
                     </div>
+                    <input type="file" ref={fileInputRef} onChange={(e) => e.target.files?.[0] && processFile(e.target.files[0])} accept=".srt" className="hidden" />
                   </div>
                </section>
             ) : optimizeStep === 1 ? (
@@ -388,13 +391,14 @@ const App: React.FC = () => {
                 </div>
                 <h2 className="text-3xl font-bold mb-5 tracking-tight">Quick Analyze {fileName}</h2>
                 <p className="text-slate-400 text-sm mb-10 leading-relaxed max-w-lg mx-auto">
-                  Smart Hybrid Mode: Auto math-fix for 20-40 CPS. AI-only for &gt;40 CPS errors.
+                  Smart Hybrid Mode: Auto fix 20-40 CPS an toàn. Chỉ dùng AI cho lỗi nặng &gt;40 CPS.
                 </p>
                 <div className="flex gap-4 justify-center">
                   <button onClick={runQuickAnalyze} disabled={isQuickAnalyzing} className="px-12 py-5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-2xl flex items-center justify-center gap-3 shadow-2xl transition-all active:scale-95">
                     {isQuickAnalyzing ? <Loader2 className="animate-spin" /> : <BarChart3 size={24} />} 
-                    {isQuickAnalyzing ? 'Analyzing...' : 'Start Quick Analyze'}
+                    {isQuickAnalyzing ? 'Analyzing...' : 'Bắt đầu Quick Analyze'}
                   </button>
+                  <button onClick={() => {setFileName(''); setBlocks([]);}} className="px-8 py-5 bg-slate-800 hover:bg-slate-700 text-slate-400 font-bold rounded-2xl transition-all">Đổi file</button>
                 </div>
               </section>
             ) : (
@@ -404,13 +408,13 @@ const App: React.FC = () => {
                     <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                       <Brain size={64} />
                     </div>
-                    <p className="text-[11px] text-slate-500 uppercase font-bold mb-2 tracking-[0.2em] group-hover:text-red-400 transition-colors">AI REQUIRED SEGMENTS</p>
+                    <p className="text-[11px] text-slate-500 uppercase font-bold mb-2 tracking-[0.2em] group-hover:text-red-400 transition-colors">AI REQUIRED LIST</p>
                     <p className="text-5xl font-black text-red-500 tracking-tighter">{aiRequiredList.length}</p>
-                    <p className="text-[10px] text-slate-600 mt-2 italic">(&gt; 40 CPS — Needs AI Contextual Rewrite)</p>
+                    <p className="text-[10px] text-slate-600 mt-2 italic">(&gt; 40 CPS — Cần AI rút gọn nội dung)</p>
                   </div>
-                  <div className="bg-slate-900/50 backdrop-blur-md p-8 rounded-[2.5rem] border border-slate-800 text-center shadow-lg hover:border-indigo-500/20 transition-all">
+                  <div className="bg-slate-900/50 backdrop-blur-md p-8 rounded-[2.5rem] border border-slate-800 text-center shadow-lg">
                     <div className="flex flex-col h-full justify-center">
-                      <p className="text-slate-400 text-xs mb-8">Local math fixes (20-40 CPS) applied in realtime to working copy.</p>
+                      <p className="text-slate-400 text-xs mb-8 italic">Mọi lỗi 20-40 CPS sẽ được tự động fix bằng toán học khi bấm nút bên dưới.</p>
                       <div className="flex gap-3 justify-center">
                          {!isAiProcessing ? (
                             <button onClick={applyOptimize} className="flex-1 px-8 py-5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-2xl flex items-center justify-center gap-3 shadow-2xl shadow-red-600/30 transition-all active:scale-95">
@@ -427,10 +431,13 @@ const App: React.FC = () => {
                 </div>
 
                 {isAiProcessing && (
-                  <div className="bg-slate-900/80 p-8 rounded-3xl border border-red-500/20 animate-pulse shadow-2xl shadow-red-500/5">
+                  <div className="bg-slate-900/80 p-8 rounded-3xl border border-red-500/20 shadow-2xl shadow-red-500/5 relative overflow-hidden">
+                    <div className="absolute top-0 left-0 h-1 w-full bg-slate-800 overflow-hidden">
+                       <div className="h-full bg-red-500 animate-[loading_2s_infinite]" />
+                    </div>
                     <div className="flex justify-between items-center mb-6 px-2">
                        <p className="text-xs font-bold text-red-400 uppercase tracking-[0.2em] flex items-center gap-3">
-                         <Activity size={18} /> Processing {aiProgress} / {aiRequiredList.length} segments...
+                         <Activity size={18} className="animate-pulse" /> Processing {aiProgress} / {aiRequiredList.length} critical segments...
                        </p>
                        <span className="text-xs font-mono font-bold text-red-400">{Math.round((aiProgress / aiRequiredList.length) * 100)}%</span>
                     </div>
@@ -450,9 +457,8 @@ const App: React.FC = () => {
                         {optimizeError ? '❌ AI Optimization Error' : '⛔ Optimization Cancelled'}
                       </p>
                       <p className="text-sm text-slate-300 leading-relaxed font-medium">
-                        {optimizeError ? `Error: ${optimizeError}` : `Completed ${aiProgress} / ${aiRequiredList.length} segments successfully.`}
+                        {optimizeError ? `Error Details: ${optimizeError}` : `Tạm dừng! Đã hoàn tất ${aiProgress} / ${aiRequiredList.length} câu nặng nhất.`}
                       </p>
-                      <p className="text-[10px] text-slate-500 uppercase mt-4 font-bold tracking-widest">You can still download the partially optimized file below.</p>
                     </div>
                   </div>
                 )}
@@ -460,13 +466,12 @@ const App: React.FC = () => {
                 <div className="bg-slate-900 border border-slate-800 rounded-[2.5rem] overflow-hidden shadow-2xl">
                    <div className="p-8 border-b border-slate-800 flex justify-between items-center bg-slate-900/90 backdrop-blur-xl sticky top-0 z-10">
                      <h3 className="text-sm font-bold text-indigo-400 uppercase tracking-widest flex items-center gap-3">
-                       <ListChecks size={22} className="text-indigo-400"/> Critical Review List (&gt;40 CPS)
+                       <ListChecks size={22} className="text-indigo-400"/> Critical Review (&gt;40 CPS)
                      </h3>
                      <div className="flex gap-4">
                        <button onClick={() => downloadSRT(true)} className="px-8 py-3 bg-emerald-600/10 text-emerald-400 hover:bg-emerald-600/20 border border-emerald-600/20 rounded-2xl text-xs font-bold uppercase transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/5 active:scale-95">
                          <Download size={18}/> Download Current File
                        </button>
-                       <button onClick={() => setOptimizeStep(1)} className="text-xs font-bold text-slate-500 hover:text-slate-300 uppercase transition-colors px-4 border-l border-slate-800 ml-2">Reset</button>
                      </div>
                    </div>
                    <div className="p-8 max-h-[700px] overflow-y-auto space-y-6 custom-scrollbar bg-slate-950/20">
@@ -475,15 +480,14 @@ const App: React.FC = () => {
                          <div className="w-24 h-24 bg-emerald-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-emerald-500/20">
                            <CheckCircle2 size={56} className="text-emerald-500" strokeWidth={1} />
                          </div>
-                         <p className="text-sm font-bold uppercase tracking-[0.5em] text-emerald-400">All segments under 40 CPS</p>
-                         <p className="text-xs text-slate-500 italic">No critical errors found in this file.</p>
+                         <p className="text-sm font-bold uppercase tracking-[0.5em] text-emerald-400">Tất cả segment đều đạt chuẩn (&lt;40 CPS)</p>
                        </div>
                      ) : aiRequiredList.map(s => {
-                       const isRecentlyApplied = s.appliedAt && (Date.now() - s.appliedAt < 2000);
+                       const isRecentlyApplied = s.appliedAt && (Date.now() - s.appliedAt < 2500);
                        return (
                          <div key={s.id} className={`group p-6 rounded-[2rem] border transition-all duration-700 ${
                            isRecentlyApplied
-                           ? 'bg-indigo-500/20 border-indigo-400 shadow-2xl shadow-indigo-500/20 scale-[1.01]'
+                           ? 'bg-emerald-500/20 border-emerald-400 shadow-2xl shadow-emerald-500/20 scale-[1.01]'
                            : s.status === 'applied' 
                            ? 'bg-emerald-500/5 border-emerald-500/20 shadow-lg shadow-emerald-500/5' 
                            : s.status === 'processing'
@@ -501,7 +505,7 @@ const App: React.FC = () => {
                                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Segment #{s.index}</p>
                                  <div className="flex items-center gap-2">
                                    <span className={`text-sm font-black ${s.cps > 50 ? 'text-red-500' : 'text-red-400'}`}>{s.cps.toFixed(1)} CPS</span>
-                                   {s.cps > 60 && <span className="text-[8px] bg-red-500/20 text-red-500 px-1.5 py-0.5 rounded uppercase font-black tracking-tighter">Extreme</span>}
+                                   {s.cps > 60 && <span className="text-[8px] bg-red-500/20 text-red-500 px-1.5 py-0.5 rounded uppercase font-black tracking-tighter">Cực nhanh</span>}
                                  </div>
                                </div>
                            </div>
@@ -512,21 +516,21 @@ const App: React.FC = () => {
                                </div>
                              ) : s.status === 'processing' ? (
                                <div className="flex items-center gap-2 px-4 py-2 bg-indigo-500/20 text-indigo-400 rounded-2xl text-[10px] font-bold uppercase border border-indigo-500/30">
-                                 <Loader2 size={16} className="animate-spin" /> Live Rewriting...
+                                 <Loader2 size={16} className="animate-spin" /> Rewriting...
                                </div>
                              ) : s.status === 'error' ? (
                                <div className="flex items-center gap-2 px-4 py-2 bg-red-500/20 text-red-500 rounded-2xl text-[10px] font-bold uppercase border border-red-500/30">
-                                 <AlertTriangle size={16} /> Failed
+                                 <AlertTriangle size={16} /> Lỗi
                                </div>
                              ) : (
-                               <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-2 bg-slate-800 rounded-2xl border border-slate-700 shadow-inner">Waiting AI</div>
+                               <div className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-4 py-2 bg-slate-800 rounded-2xl border border-slate-700 shadow-inner">Chờ AI</div>
                              )}
                            </div>
                          </div>
                          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                            <div className="space-y-3">
                              <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest pl-3 flex items-center gap-2">
-                               <Clock size={12}/> Original Timing:
+                               <Clock size={12}/> Original:
                              </p>
                              <div className="p-6 bg-slate-950/80 rounded-[1.5rem] border border-slate-800/80 group-hover:bg-slate-950/50 transition-colors">
                                <p className="text-[10px] font-mono text-slate-600 mb-3">{s.beforeTimestamp}</p>
@@ -535,12 +539,12 @@ const App: React.FC = () => {
                            </div>
                            <div className="space-y-3">
                              <p className="text-[10px] text-emerald-500 uppercase font-bold tracking-widest pl-3 flex items-center gap-2">
-                               <Sparkles size={12}/> AI Optimization:
+                               <Sparkles size={12}/> AI Fix:
                              </p>
                              <div className={`p-6 rounded-[1.5rem] border transition-all duration-1000 ${s.status === 'applied' ? 'bg-emerald-500/10 border-emerald-500/40 shadow-inner shadow-emerald-500/5' : 'bg-slate-950/30 border-slate-800'}`}>
                                <p className={`text-[10px] font-mono mb-3 ${s.afterTimestamp !== s.beforeTimestamp ? 'text-emerald-400 font-bold' : 'text-slate-600'}`}>{s.afterTimestamp}</p>
-                               <div className={`text-sm leading-relaxed font-serif-vi ${s.status === 'applied' ? 'text-slate-100' : 'text-slate-500 opacity-30'}`}>
-                                 {s.status === 'applied' ? s.afterText : <span className="animate-pulse">Awaiting AI analysis...</span>}
+                               <div className={`text-sm leading-relaxed font-serif-vi ${s.status === 'applied' ? 'text-slate-100 font-bold' : 'text-slate-500 opacity-30'}`}>
+                                 {s.status === 'applied' ? s.afterText : <span className="animate-pulse">Đang phân tích ngữ cảnh...</span>}
                                </div>
                              </div>
                            </div>
@@ -561,10 +565,10 @@ const App: React.FC = () => {
 
       <footer className="p-6 text-center border-t border-slate-900 bg-slate-950/90 z-20 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-           <p className="text-slate-700 text-[10px] uppercase tracking-[0.4em] font-black">Donghua AI Engine • v5.3 Realtime Hybrid</p>
+           <p className="text-slate-700 text-[10px] uppercase tracking-[0.4em] font-black">Donghua AI Subtitle Engine • v5.4 Hybrid Mode</p>
            <div className="flex gap-8 text-[9px] font-bold text-slate-600 uppercase tracking-widest">
               <span className="flex items-center gap-2 group hover:text-indigo-400 transition-colors cursor-default">
-                <ShieldCheck size={14} className="text-indigo-500"/> AI Contextual Review
+                <ShieldCheck size={14} className="text-indigo-500"/> AI Context Review
               </span>
               <span className="flex items-center gap-2 group hover:text-emerald-400 transition-colors cursor-default">
                 <Zap size={14} className="text-emerald-500"/> Math Safety Logic

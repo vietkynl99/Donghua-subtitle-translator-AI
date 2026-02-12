@@ -24,15 +24,15 @@ export const msToTimestamp = (ms: number): string => {
 };
 
 /**
- * Step 1: Quick Analyze - Local math logic
+ * Step 1: Quick Analyze - Local math logic ONLY
  * 🟢 < 20: Ignore
- * 🟡 20 - 40: Calculate local end_time fix (Transparent)
- * 🔴 > 40: Mark AI Required
+ * 🟡 20 - 40: Calculate local end_time fix (Applied to working copy silently)
+ * 🔴 > 40: Mark AI Required for UI list
  */
 export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResult => {
   const aiRequiredSegments: HybridOptimizeSuggestion[] = [];
   let localFixCount = 0;
-  const SAFE_GAP = 50; // 0.05s as per prompt
+  const SAFE_GAP = 50; // 0.05s
 
   blocks.forEach((b, idx) => {
     const parts = b.timestamp.split(' --> ');
@@ -45,16 +45,16 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
     const charCount = text.length;
     const cps = durationS > 0 ? charCount / durationS : 999;
 
-    // RULE 1: CPS < 20 -> Ignore completely
+    // RULE 1: CPS < 20 -> Ignore
     if (cps < 20) return;
 
-    // RULE 2: 20 <= CPS <= 40 -> Internal math fix calculation
+    // RULE 2: 20 <= CPS <= 40 -> Internal math fix (Calculated now, applied in Step 2 start)
     if (cps >= 20 && cps <= 40) {
       const targetCps = 20;
       const requiredDurationMs = (charCount / targetCps) * 1000;
       let idealEndMs = startMs + requiredDurationMs;
 
-      // Check for overlap with next segment
+      // Anti-overlap: check next segment's start
       const nextBlock = blocks[idx + 1];
       if (nextBlock) {
         const nextStartMs = timestampToMs(nextBlock.timestamp.split(' --> ')[0]);
@@ -62,14 +62,14 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
         idealEndMs = Math.min(idealEndMs, maxAllowedEnd);
       }
 
-      // If we can extend it effectively
-      if (idealEndMs > endMs + 5) { 
+      // Only count if we actually improve timing
+      if (idealEndMs > endMs + 10) { 
         localFixCount++;
       }
       return;
     }
 
-    // RULE 3: CPS > 40 -> AI REQUIRED
+    // RULE 3: CPS > 40 -> AI REQUIRED list
     if (cps > 40) {
       aiRequiredSegments.push({
         id: `ai-${b.index}`,
@@ -90,7 +90,7 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
 };
 
 /**
- * Apply safe math fixes to 20-40 range segments
+ * Apply local fixes (20-40 CPS) to blocks working copy
  */
 export const applyLocalFixesOnly = (blocks: SubtitleBlock[]): SubtitleBlock[] => {
   const newBlocks = blocks.map(b => ({ ...b }));
@@ -106,6 +106,7 @@ export const applyLocalFixesOnly = (blocks: SubtitleBlock[]): SubtitleBlock[] =>
     const charCount = text.length;
     const cps = durationS > 0 ? charCount / durationS : 999;
 
+    // Fix timing for 20-40 range to hit 20 CPS where possible
     if (cps >= 20 && cps <= 40) {
       const targetCps = 20;
       const requiredDurationMs = (charCount / targetCps) * 1000;
@@ -118,7 +119,6 @@ export const applyLocalFixesOnly = (blocks: SubtitleBlock[]): SubtitleBlock[] =>
         idealEndMs = Math.min(idealEndMs, maxAllowedEnd);
       }
 
-      // Final end time must be at least current or better
       if (idealEndMs > endMs) {
         b.timestamp = `${parts[0]} --> ${msToTimestamp(idealEndMs)}`;
       }
