@@ -377,7 +377,7 @@ const App: React.FC = () => {
                     </div>
                     <h2 className="text-3xl font-bold mb-4 tracking-tight">Hybrid Optimizer</h2>
                     <p className="text-slate-400 text-sm mb-10 leading-relaxed max-w-md mx-auto">
-                      Hệ thống tự động xử lý CPS bằng toán học (20-30) và dùng AI cho các ca khó (>30). <br/>
+                      Hệ thống tự động xử lý CPS bằng toán học (20-30) và dùng AI cho các ca khó (&gt;30). <br/>
                       Vui lòng kéo thả file vào đây để bắt đầu.
                     </p>
                     <div className="flex items-center gap-3 bg-indigo-600 px-10 py-5 rounded-2xl font-bold text-white shadow-2xl shadow-indigo-600/30 hover:bg-indigo-700 transition-all transform active:scale-95">
