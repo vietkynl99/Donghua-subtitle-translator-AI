@@ -15,9 +15,8 @@ body {
   font-family: 'Noto Serif VI', serif;
 }
 
-/* Custom scrollbar for better aesthetics */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -33,18 +32,20 @@ body {
   background: #334155;
 }
 
-@keyframes bounce-short {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2px); }
+@keyframes loading {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
 }
 
-.animate-bounce-short {
-  animation: bounce-short 1s ease-in-out infinite;
+.animate-loading {
+  animation: loading 2s infinite ease-in-out;
 }
 
-/* Custom utility for glass effect */
-.glass {
-  background: rgba(15, 23, 42, 0.8);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s infinite ease-in-out;
 }

@@ -27,11 +27,7 @@ export interface SubtitleBlock {
   timestamp: string;
   originalText: string;
   translatedText?: string;
-}
-
-export interface HybridOptimizeResult {
-  aiRequiredSegments: HybridOptimizeSuggestion[];
-  localFixCount: number;
+  mergeRef?: string; // Reference for Merge feature
 }
 
 export interface HybridOptimizeSuggestion {
@@ -49,6 +45,11 @@ export interface HybridOptimizeSuggestion {
   appliedAt?: number;
 }
 
+export interface HybridOptimizeResult {
+  aiRequiredSegments: HybridOptimizeSuggestion[];
+  localFixCount: number;
+}
+
 export interface OptimizeStats {
   total: number;
   processed: number;
@@ -57,28 +58,19 @@ export interface OptimizeStats {
   ignored: number;
 }
 
-export interface SessionStats {
-  requests: number;
-  totalTokens: number;
-  translatedBlocks: number;
-}
-
-export interface InterruptionInfo {
-  reason: string;
+export interface MergeStats {
   total: number;
-  translated: number;
-  remaining: number;
+  matched: number;
+  aiAligned: number;
+  failed: number;
 }
-
-export type AiProvider = 'gemini' | 'openai';
 
 export interface TranslationState {
-  isTranslating: boolean;
+  isProcessing: boolean;
   isAnalyzing: boolean;
   progress: number;
   total: number;
   error: string | null;
-  interruption: InterruptionInfo | null;
   fileStatus: 'new' | 'mixed' | 'completed' | null;
   apiStatus: 'checking' | 'valid' | 'invalid' | 'unknown';
   selectedModel: string;

@@ -1,31 +1,26 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { SubtitleBlock, TitleAnalysis, AiProvider, HybridOptimizeSuggestion } from "../types";
+import { SubtitleBlock, TitleAnalysis, HybridOptimizeSuggestion } from "../types";
 
 const MAP_MODEL_ID = (modelName: string): string => {
   const name = modelName.toLowerCase();
   if (name.includes('pro')) return 'gemini-3-pro-preview';
+  // Default to Gemini 3 Flash per Persona instructions for general tasks
   return 'gemini-3-flash-preview';
 };
 
-/**
- * Maps complex API errors to clean, user-friendly strings.
- * Prevents raw JSON dumping in the UI.
- */
 const mapApiError = (error: any): string => {
   const msg = error?.toString() || "";
-  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) return "API quota exceeded. Please check your plan or try again later.";
-  if (msg.includes("401")) return "Invalid API key. Access denied.";
-  if (msg.includes("403")) return "Access denied to this model.";
-  if (msg.includes("500") || msg.includes("503")) return "Server is temporarily busy. Retrying might help.";
-  if (msg.includes("timeout") || msg.includes("deadline")) return "Request timed out. Check your connection.";
-  if (msg.includes("aborted")) return "Optimization cancelled by user.";
-  return "Unexpected AI error occurred. Please try a different model.";
+  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) return "API quota exceeded";
+  if (msg.includes("401")) return "Invalid API key";
+  if (msg.includes("403")) return "Access denied";
+  if (msg.includes("timeout") || msg.includes("deadline")) return "Network error";
+  return "Unexpected error occurred";
 };
 
-const withRetry = async <T>(fn: () => Promise<T>, retries = 2, delay = 2000): Promise<T> => {
-  try {
-    return await fn();
+async function withRetry<T>(fn: () => Promise<T>, retries = 2, delay = 2000): Promise<T> {
+  try { 
+    return await fn(); 
   } catch (error: any) {
     if (retries > 0) {
       await new Promise(resolve => setTimeout(resolve, delay));
@@ -33,30 +28,33 @@ const withRetry = async <T>(fn: () => Promise<T>, retries = 2, delay = 2000): Pr
     }
     throw error;
   }
-};
+}
 
 export const checkApiHealth = async (model: string): Promise<boolean> => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = process.env.API_KEY || '';
   if (!apiKey) return false;
   try {
     const ai = new GoogleGenAI({ apiKey });
     await withRetry(() => ai.models.generateContent({ 
       model: MAP_MODEL_ID(model), 
       contents: "hi", 
-      config: { maxOutputTokens: 5 } 
+      config: { 
+        maxOutputTokens: 10,
+        thinkingConfig: { thinkingBudget: 0 }
+      } 
     }));
     return true;
   } catch { return false; }
 };
 
 export const analyzeTitle = async (title: string, model: string): Promise<{ analysis: TitleAnalysis, tokens: number }> => {
-  const apiKey = process.env.API_KEY || "";
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
   const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
     model: MAP_MODEL_ID(model),
-    contents: `Phân tích tiêu đề Donghua "${title}" trả về JSON.`,
+    contents: `Analyze Donghua title "${title}" for translation direction. Return JSON.`,
     config: {
       responseMimeType: "application/json",
+      thinkingConfig: { thinkingBudget: 0 },
       responseSchema: {
         type: Type.OBJECT,
         properties: {
@@ -74,44 +72,67 @@ export const analyzeTitle = async (title: string, model: string): Promise<{ anal
   return { analysis: JSON.parse(response.text || "{}"), tokens: response.usageMetadata?.totalTokenCount || 0 };
 };
 
-export const translateSubtitles = async (
+export const translateBatch = async (
   blocks: SubtitleBlock[],
   analysis: TitleAnalysis,
-  model: string,
-  onProgress: (translatedCount: number, tokensAdded: number) => void
-): Promise<SubtitleBlock[]> => {
-  const apiKey = process.env.API_KEY || "";
-  const CHUNK_SIZE = 8;
-  const translatedBlocks: SubtitleBlock[] = [...blocks];
-  for (let i = 0; i < blocks.length; i += CHUNK_SIZE) {
-    const chunk = blocks.slice(i, i + CHUNK_SIZE);
-    const pending = chunk.filter(b => !b.translatedText || /[\u4e00-\u9fa5]/.test(b.translatedText || b.originalText));
-    if (pending.length === 0) { onProgress(Math.min(i + CHUNK_SIZE, blocks.length), 0); continue; }
-    
-    const ai = new GoogleGenAI({ apiKey });
+  model: string
+): Promise<{ id: string, translated: string }[]> => {
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+    const prompt = `Dịch phụ đề Donghua: "${analysis.translatedTitle}". Phong cách: ${analysis.recommendedStyle}.
+DỮ LIỆU: ${JSON.stringify(blocks.map(b => ({ id: b.index, text: b.originalText })))}
+Trả về JSON ARRAY: [{"id": "...", "translated": "..."}]`;
+
     const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
       model: MAP_MODEL_ID(model),
-      contents: `Dịch phụ đề: ${analysis.translatedTitle}. Phong cách: ${analysis.recommendedStyle}. Dữ liệu: ${JSON.stringify(pending.map(b => ({ id: b.index, text: b.translatedText || b.originalText })))}`,
-      config: { 
-        responseMimeType: "application/json", 
-        responseSchema: { 
-          type: Type.ARRAY, 
-          items: { 
-            type: Type.OBJECT, 
-            properties: { 
-              id: { type: Type.STRING }, 
-              translated: { type: Type.STRING } 
-            }, 
-            required: ["id", "translated"] 
-          } 
-        } 
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 0 },
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: { id: { type: Type.STRING }, translated: { type: Type.STRING } },
+            required: ["id", "translated"]
+          }
+        }
       }
     }));
-    const results = JSON.parse(response.text || "[]");
-    results.forEach((res: any) => { const idx = translatedBlocks.findIndex(b => b.index === res.id); if (idx !== -1) translatedBlocks[idx].translatedText = res.translated; });
-    onProgress(Math.min(i + CHUNK_SIZE, blocks.length), response.usageMetadata?.totalTokenCount || 0);
-  }
-  return translatedBlocks;
+    return JSON.parse(response.text || "[]");
+  } catch (err) { throw new Error(mapApiError(err)); }
+};
+
+export const alignMergeBatch = async (
+  blocks: SubtitleBlock[],
+  hardsubLines: string[],
+  model: string
+): Promise<{ id: string, merged: string }[]> => {
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+    const prompt = `NHIỆM VỤ: Gán nội dung từ Hardsub vào Softsub (timing chuẩn) dựa trên ngữ cảnh.
+DỮ LIỆU SOFTSUB: ${JSON.stringify(blocks.map(b => ({ id: b.index, text: b.originalText })))}
+DỮ LIỆU HARDSUB: ${JSON.stringify(hardsubLines)}
+Trả về JSON ARRAY mapping theo id softsub: [{"id": "...", "merged": "nội dung hardsub tương ứng"}]`;
+
+    const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
+      model: MAP_MODEL_ID(model),
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 0 },
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: { id: { type: Type.STRING }, merged: { type: Type.STRING } },
+            required: ["id", "merged"]
+          }
+        }
+      }
+    }));
+    return JSON.parse(response.text || "[]");
+  } catch (err) { throw new Error(mapApiError(err)); }
 };
 
 export const optimizeHighCpsBatch = async (
@@ -120,36 +141,24 @@ export const optimizeHighCpsBatch = async (
   model: string
 ): Promise<{ id: string, afterText: string, afterTimestamp: string }[]> => {
   try {
-    const apiKey = process.env.API_KEY || "";
-    const ai = new GoogleGenAI({ apiKey });
-    
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
     const payload = targetSuggestions.map(s => {
-      const currentIdx = allBlocks.findIndex(b => b.index === s.index);
-      const context = allBlocks.slice(Math.max(0, currentIdx - 2), Math.min(allBlocks.length, currentIdx + 3))
+      const idx = allBlocks.findIndex(b => b.index === s.index);
+      const context = allBlocks.slice(Math.max(0, idx - 2), Math.min(allBlocks.length, idx + 3))
         .map(b => ({ id: b.index, text: b.translatedText || b.originalText, ts: b.timestamp }));
-      
-      return {
-        targetId: s.index,
-        currentText: s.beforeText,
-        currentCps: s.cps,
-        context: context
-      };
+      return { targetId: s.index, text: s.beforeText, cps: s.cps, context };
     });
 
-    const prompt = `Bạn là chuyên gia tối ưu phụ đề. Các đoạn sau có tốc độ đọc quá cao (>40 ký tự/s).
-NHIỆM VỤ: Rút gọn nội dung (rewrite) sao cho ngắn hơn, dễ đọc hơn mà vẫn giữ nguyên ý nghĩa và mạch truyện.
-Cấm: Không đổi ID. Không đổi ý nghĩa cốt truyện. 
-Chỉnh nhẹ timing (afterTimestamp) nếu cần thiết nhưng không được gây đè (overlap) với context.
-
-Dữ liệu: ${JSON.stringify(payload)}
-
-Trả về JSON ARRAY: [{"id": "...", "afterText": "nội dung đã rút gọn", "afterTimestamp": "giữ nguyên hoặc chỉnh nhẹ"}]`;
+    const prompt = `Optimize subtitles with CPS > 40. Shorten text or adjust timing without overlap.
+DỮ LIỆU: ${JSON.stringify(payload)}
+Trả về JSON ARRAY: [{"id": "...", "afterText": "...", "afterTimestamp": "..."}]`;
 
     const response: GenerateContentResponse = await withRetry(() => ai.models.generateContent({
       model: MAP_MODEL_ID(model),
       contents: prompt,
       config: {
         responseMimeType: "application/json",
+        thinkingConfig: { thinkingBudget: 0 },
         responseSchema: {
           type: Type.ARRAY,
           items: {
@@ -164,9 +173,6 @@ Trả về JSON ARRAY: [{"id": "...", "afterText": "nội dung đã rút gọn",
         }
       }
     }));
-
     return JSON.parse(response.text || "[]");
-  } catch (err: any) {
-    throw new Error(mapApiError(err));
-  }
+  } catch (err) { throw new Error(mapApiError(err)); }
 };

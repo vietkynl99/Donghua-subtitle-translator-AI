@@ -1,9 +1,6 @@
 
 import { SubtitleBlock, HybridOptimizeSuggestion, HybridOptimizeResult } from '../types';
 
-/**
- * Convert SRT timestamp (00:00:00,000) to Milliseconds
- */
 export const timestampToMs = (ts: string): number => {
   const match = ts.match(/(\d{2}):(\d{2}):(\d{2}),(\d{3})/);
   if (!match) return 0;
@@ -11,9 +8,6 @@ export const timestampToMs = (ts: string): number => {
   return h * 3600000 + m * 60000 + s * 1000 + ms;
 };
 
-/**
- * Convert Milliseconds to SRT timestamp
- */
 export const msToTimestamp = (ms: number): string => {
   if (ms < 0) ms = 0;
   const h = Math.floor(ms / 3600000);
@@ -23,16 +17,10 @@ export const msToTimestamp = (ms: number): string => {
   return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')},${mss.toString().padStart(3, '0')}`;
 };
 
-/**
- * Step 1: Quick Analyze - Local math logic ONLY
- * 🟢 < 20: Ignore
- * 🟡 20 - 40: Calculate local end_time fix (Applied to working copy silently)
- * 🔴 > 40: Mark AI Required for UI list
- */
 export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResult => {
   const aiRequiredSegments: HybridOptimizeSuggestion[] = [];
   let localFixCount = 0;
-  const SAFE_GAP = 50; // 0.05s
+  const SAFE_GAP = 50; 
 
   blocks.forEach((b, idx) => {
     const parts = b.timestamp.split(' --> ');
@@ -45,16 +33,13 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
     const charCount = text.length;
     const cps = durationS > 0 ? charCount / durationS : 999;
 
-    // RULE 1: CPS < 20 -> Ignore
     if (cps < 20) return;
 
-    // RULE 2: 20 <= CPS <= 40 -> Internal math fix (Calculated now, applied in Step 2 start)
     if (cps >= 20 && cps <= 40) {
       const targetCps = 20;
       const requiredDurationMs = (charCount / targetCps) * 1000;
       let idealEndMs = startMs + requiredDurationMs;
 
-      // Anti-overlap: check next segment's start
       const nextBlock = blocks[idx + 1];
       if (nextBlock) {
         const nextStartMs = timestampToMs(nextBlock.timestamp.split(' --> ')[0]);
@@ -62,14 +47,12 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
         idealEndMs = Math.min(idealEndMs, maxAllowedEnd);
       }
 
-      // Only count if we actually improve timing
       if (idealEndMs > endMs + 10) { 
         localFixCount++;
       }
       return;
     }
 
-    // RULE 3: CPS > 40 -> AI REQUIRED list
     if (cps > 40) {
       aiRequiredSegments.push({
         id: `ai-${b.index}`,
@@ -89,9 +72,6 @@ export const performQuickAnalyze = (blocks: SubtitleBlock[]): HybridOptimizeResu
   return { aiRequiredSegments, localFixCount };
 };
 
-/**
- * Apply local fixes (20-40 CPS) to blocks working copy
- */
 export const applyLocalFixesOnly = (blocks: SubtitleBlock[]): SubtitleBlock[] => {
   const newBlocks = blocks.map(b => ({ ...b }));
   const SAFE_GAP = 50;
@@ -106,7 +86,6 @@ export const applyLocalFixesOnly = (blocks: SubtitleBlock[]): SubtitleBlock[] =>
     const charCount = text.length;
     const cps = durationS > 0 ? charCount / durationS : 999;
 
-    // Fix timing for 20-40 range to hit 20 CPS where possible
     if (cps >= 20 && cps <= 40) {
       const targetCps = 20;
       const requiredDurationMs = (charCount / targetCps) * 1000;
@@ -139,7 +118,6 @@ export const parseSRT = (content: string): SubtitleBlock[] => {
       const index = lines[0];
       const timestamp = lines[1];
       const originalText = lines.slice(2).join('\n');
-      
       if (index && timestamp && originalText) {
         blocks.push({ index, timestamp, originalText });
       }
@@ -161,9 +139,7 @@ export const extractChineseTitle = (fileName: string): string => {
   return match ? match[0].trim() : name.trim();
 };
 
-export const generateFileName = (currentName: string, isFinished: boolean, speed?: number, isOptimized?: boolean): string => {
+export const generateFileName = (currentName: string, mode: 'Translated' | 'Merged' | 'Optimized'): string => {
   let baseName = currentName.replace(/\.[^/.]+$/, "");
-  if (isOptimized) return `[Optimized]_${baseName}.srt`;
-  if (isFinished) return `[Translated]_${baseName}.srt`;
-  return baseName + ".srt";
+  return `[${mode}]_${baseName}.srt`;
 };
